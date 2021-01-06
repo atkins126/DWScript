@@ -159,8 +159,9 @@ type
          function Is32BitHinted(obj : TRefCountedObject) : Boolean;
 
          property Allocator : TdwsJITAllocatorWin read FAllocator write FAllocator;
-         property AbsMaskPD : Pointer read FAbsMaskPD.Code;
-         property SignMaskPD : Pointer read FSignMaskPD.Code;
+         function AllocateStatic(const data : TBytes) : TdwsJITCodeBlock;
+         function AbsMaskPD : Pointer; inline;
+         function SignMaskPD : Pointer; inline;
 
          function CompileFloat(expr : TTypedExpr) : TxmmRegister; inline;
          procedure CompileAssignFloat(expr : TTypedExpr; source : TxmmRegister); inline;
@@ -581,6 +582,7 @@ implementation
 const
    cExecInstanceGPR = gprEDI;
    cExecInstanceEBPoffset = 4;
+   cVariant_DataOffset = 8;
 
 function int64_div(a, b : Int64) : Int64;
 begin
@@ -713,12 +715,12 @@ begin
 
    FAllocator:=TdwsJITAllocatorWin.Create;
 
-   FAbsMaskPD:=FAllocator.Allocate(TBytes.Create($FF, $FF, $FF, $FF, $FF, $FF, $FF, $7F,
-                                                 $FF, $FF, $FF, $FF, $FF, $FF, $FF, $7F));
-   FSignMaskPD:=FAllocator.Allocate(TBytes.Create($00, $00, $00, $00, $00, $00, $00, $80,
-                                                  $00, $00, $00, $00, $00, $00, $00, $80));
-   FBufferBlock:=FAllocator.Allocate(TBytes.Create($66, $66, $66, $90, $66, $66, $66, $90,
-                                                   $66, $66, $66, $90, $66, $66, $66, $90));
+   FAbsMaskPD  := AllocateStatic(TBytes.Create($FF, $FF, $FF, $FF, $FF, $FF, $FF, $7F,
+                                               $FF, $FF, $FF, $FF, $FF, $FF, $FF, $7F));
+   FSignMaskPD := AllocateStatic(TBytes.Create($00, $00, $00, $00, $00, $00, $00, $80,
+                                               $00, $00, $00, $00, $00, $00, $00, $80));
+   FBufferBlock:= AllocateStatic(TBytes.Create($66, $66, $66, $90, $66, $66, $66, $90,
+                                               $66, $66, $66, $90, $66, $66, $66, $90));
 
    FHint32bitSymbol:=TObjectsLookup.Create;
 
@@ -1204,6 +1206,31 @@ begin
    Result:=(FHint32bitSymbol.Count>0) and (FHint32bitSymbol.IndexOf(obj)>=0);
 end;
 
+// AllocateStatic
+//
+function TdwsJITx86.AllocateStatic(const data : TBytes) : TdwsJITCodeBlock;
+var
+   sub : IdwsJITCodeSubAllocator;
+   ptr : Pointer;
+begin
+   ptr := FAllocator.Allocate(data, sub);
+   Result := TdwsJITCodeBlock.Create(ptr, sub);
+end;
+
+// AbsMaskPD
+//
+function TdwsJITx86.AbsMaskPD : Pointer;
+begin
+   Result := FAbsMaskPD.CodePtr;
+end;
+
+// SignMaskPD
+//
+function TdwsJITx86.SignMaskPD : Pointer;
+begin
+   Result := FSignMaskPD.CodePtr;
+end;
+
 // CompileFloat
 //
 function TdwsJITx86.CompileFloat(expr : TTypedExpr) : TxmmRegister;
@@ -1228,10 +1255,15 @@ end;
 // CompiledOutput
 //
 function TdwsJITx86.CompiledOutput : TdwsJITCodeBlock;
+var
+   sub : IdwsJITCodeSubAllocator;
+   ptr : Pointer;
 begin
    Fixups.FlushFixups(Output.ToBytes, Output);
+   Fixups.ClearFixups;
 
-   Result:=Allocator.Allocate(Output.ToBytes);
+   ptr := Allocator.Allocate(Output.ToBytes, sub);
+   Result := TdwsJITCodeBlock.Create(ptr, sub);
    Result.Steppable:=(jitoDoStep in Options);
 end;
 
@@ -1572,7 +1604,7 @@ begin
    if TempSpaceOnStack+AllocatedStackSpace>0 then
       x86._sub_reg_int32(gprESP, TempSpaceOnStack+AllocatedStackSpace);
 
-   x86._mov_reg_dword_ptr_reg(cExecMemGPR, gprEDX, cStackMixinBaseDataOffset);
+   x86._mov_reg_dword_ptr_reg(cExecMemGPR, gprEDX, TdwsExecution.StackMixin_Offset);
 end;
 
 // NeedTempSpace
@@ -1795,7 +1827,7 @@ end;
 //
 procedure TProgramExpr86.EvalNoResult(exec : TdwsExecution);
 asm
-   jmp [eax+FCode]
+   jmp [eax+FCodePtr]
 end;
 
 // ------------------
@@ -1806,7 +1838,7 @@ end;
 //
 function TFloatExpr86.EvalAsFloat(exec : TdwsExecution) : Double;
 asm
-   jmp [eax+FCode]
+   jmp [eax+FCodePtr]
 end;
 
 // ------------------
@@ -1817,7 +1849,7 @@ end;
 //
 function TIntegerExpr86.EvalAsInteger(exec : TdwsExecution) : Int64;
 asm
-   jmp [eax+FCode]
+   jmp [eax+FCodePtr]
 end;
 
 // ------------------

@@ -26,7 +26,7 @@ interface
 uses
   Classes, SysUtils, TypInfo, Variants, System.Math,
   dwsFileSystem, dwsUtils, dwsXPlatform, dwsUnicode, dwsArrayMethodKinds,
-  dwsExprs, dwsSymbols, dwsTokenizer, dwsErrors, dwsDataContext, dwsExprList,
+  dwsExprs, dwsSymbols, dwsTokenizer, dwsTokenTypes, dwsErrors, dwsDataContext, dwsExprList,
   dwsStrings, dwsFunctions, dwsStack, dwsConnectorSymbols, dwsFilter,
   dwsCoreExprs, dwsMagicExprs, dwsRelExprs, dwsMethodExprs, dwsConstExprs,
   dwsConnectorExprs, dwsConvExprs, dwsSetOfExprs, dwsUnifiedConstants,
@@ -10650,7 +10650,9 @@ begin
             end;
 
             // Read right argument
-            right:=ReadExprAdd;
+            if tt = ttIS then
+               right := ReadExprAdd(FCompilerContext.TypAnyType)
+            else right := ReadExprAdd;
             if right=nil then
                rightTyp:=nil
             else rightTyp:=right.Typ;
@@ -10658,14 +10660,9 @@ begin
                case tt of
                   ttIS : begin
 
-                     if Result.IsOfType(FCompilerContext.TypBoolean) and right.IsOfType(FCompilerContext.TypBoolean) then begin
-                        if right.ClassType = TConstBooleanExpr then begin
-                           if not TConstBooleanExpr(right).Value then
-                              Result := TNotBoolExpr.Create(FCompilerContext, hotPos, Result);
-                           right.Free;
-                        end else begin
-                           Result := TRelEqualBoolExpr.Create(FCompilerContext, hotPos, ttIS, Result, right);
-                        end;
+                     opExpr := CreateTypedOperatorExpr(tt, hotPos, Result, right);
+                     if opExpr <> nil then begin
+                        Result := opExpr
                      end else begin
                         if not (Result.Typ is TClassSymbol) then
                            FMsgs.AddCompilerError(hotPos, CPE_ObjectExpected)
@@ -10851,41 +10848,21 @@ begin
          hotPos := FTok.HotPos;
 
          // Read right argument
-         right := ReadTerm;
+         if tt = ttAS then
+            right := ReadTerm(False, FCompilerContext.TypAnyType)
+         else right := ReadTerm;
          try
             if (Result.Typ=nil) or (right=nil) or(right.Typ=nil) then
                FMsgs.AddCompilerStop(hotPos, CPE_IncompatibleOperands);
             case tt of
                ttAS : begin
                   rightTyp:=right.Typ;
-                  if Result.Typ is TInterfaceSymbol then begin
-                     if rightTyp is TInterfaceSymbol then begin
-                        Result:=TIntfAsIntfExpr.Create(FCompilerContext, hotPos, Result, TInterfaceSymbol(rightTyp));
-                     end else begin
-                        if not (rightTyp is TClassOfSymbol) then begin
-                           FMsgs.AddCompilerError(hotPos, CPE_ClassRefExpected);
-                           rightTyp:=FCompilerContext.TypTObject.MetaSymbol;
-                        end;
-                        Result:=TIntfAsClassExpr.Create(FCompilerContext, hotPos, Result, TClassOfSymbol(rightTyp).Typ);
-                     end;
-                  end else if Result.Typ is TClassSymbol then begin
-                     if rightTyp is TInterfaceSymbol then
-                        Result:=TObjAsIntfExpr.Create(FCompilerContext, hotPos, Result, TInterfaceSymbol(rightTyp))
-                     else begin
-                        if not (rightTyp is TClassOfSymbol) then begin
-                           FMsgs.AddCompilerError(hotPos, CPE_ClassRefExpected);
-                           rightTyp:=FCompilerContext.TypTObject.MetaSymbol;
-                        end;
-                        Result:=TObjAsClassExpr.Create(FCompilerContext, hotPos, Result, TClassOfSymbol(rightTyp).Typ);
-                     end;
+                  var asCastExpr := FOperators.CreateAsCastExpr(FCompilerContext, Result, right.Typ, hotPos);
+                  if asCastExpr <> nil then begin
+                     Result := asCastExpr
                   end else begin
-                     if not (Result.Typ is TClassOfSymbol) then
-                        FMsgs.AddCompilerError(hotPos, CPE_ObjectExpected)
-                     else if not (rightTyp is TClassOfSymbol) then begin
-                        FMsgs.AddCompilerStop(hotPos, CPE_ClassRefExpected);
-                        rightTyp:=FCompilerContext.TypTObject.MetaSymbol;
-                     end;
-                     Result:=TClassAsClassExpr.Create(FCompilerContext, hotPos, Result, TClassOfSymbol(rightTyp));
+                     FMsgs.AddCompilerErrorFmt(hotPos, CPE_CannotCastAs, [ Result.Typ.Caption, rightTyp.Caption ]);
+                     Result := TConvInvalidExpr.Create(FCompilerContext, hotPos, Result, rightTyp);
                   end;
                   OrphanAndNil(right);
                end;

@@ -19,6 +19,8 @@ unit dwsUtils;
 {$I dws.inc}
 {$R-}
 
+{.$define DOUBLE_FREE_PROTECTOR}
+
 interface
 
 uses
@@ -47,9 +49,16 @@ type
          {$ifdef FPC}
          FRefCount : Integer;
          {$endif}
+         {$ifdef DOUBLE_FREE_PROTECTOR}
+         FDoubleFreeProtector : Int64;
+         {$endif}
          function  GetRefCount : Integer; inline;
          procedure SetRefCount(n : Integer); inline;
       public
+         {$ifdef DOUBLE_FREE_PROTECTOR}
+         constructor Create;
+         destructor Destroy; override;
+         {$endif}
          function  IncRefCount : Integer; inline;
          function  DecRefCount : Integer;
          property  RefCount : Integer read GetRefCount write SetRefCount;
@@ -764,6 +773,7 @@ type
          procedure WriteBytes(const buffer : RawByteString); overload;
          procedure WriteInt32(const i : Integer); inline;
          procedure WriteDWord(const dw : DWORD); inline;
+         procedure WriteQWord(const qw : UInt64); inline;
 
          procedure WriteP(p : PWideChar; nbWideChars : Integer); inline;
 
@@ -1006,8 +1016,6 @@ procedure RawByteStringToScriptString(const s : RawByteString; var result : Vari
 function ScriptStringToRawByteString(const s : UnicodeString) : RawByteString; overload; inline;
 procedure ScriptStringToRawByteString(const s : UnicodeString; var result : RawByteString); overload;
 
-procedure WordsToBytes(src : PWord; dest : PByte; nbWords : Integer);
-
 procedure StringBytesToWords(var buf : UnicodeString; swap : Boolean);
 procedure StringWordsToBytes(var buf : UnicodeString; swap : Boolean);
 
@@ -1213,6 +1221,7 @@ begin
       Result:=(Result xor p^)*16777619;
       Inc(p);
    end;
+   if Result = 0 then Result := 1;
 end;
 
 // SimpleIntegerHash
@@ -1223,6 +1232,7 @@ begin
    Result := x * $cc9e2d51;
    Result := (Result shl 15) or (Result shr 17);
    Result := Result * $1b873593 + $e6546b64;
+   if Result = 0 then Result := 1;
 end;
 
 // SimplePointerHash
@@ -1242,6 +1252,7 @@ begin
    mix := (mix xor (mix shr 15)) * Cardinal(3266489917);
    Result := (mix xor (mix shr 16));
    {$endif}
+   if Result = 0 then Result := 1;
 end;
 
 // SimpleInt64Hash
@@ -1258,6 +1269,7 @@ begin
    k := (x shr 32) * $cc9e2d51;
    k := (k shl 15) or (k shr 17);
    Result := k * $1b873593 xor Result;
+   if Result = 0 then Result := 1;
 end;
 
 // StringBytesToWords
@@ -2452,11 +2464,23 @@ function VarCompareSafe(const left, right : Variant) : TVariantRelationship;
    end;
 
 begin
-   if VarType(left) = varUnknown then
-      if VarType(right) = varUnknown then
-         Result := CompareUnknowns(IUnknown(TVarData(left).VUnknown), IUnknown(TVarData(right).VUnknown))
-      else Result := CompareUnknownToVar(IUnknown(TVarData(left).VUnknown), right)
-   else if VarType(right) = varUnknown then
+   case VarType(left) of
+      varUnknown : begin
+         if VarType(right) = varUnknown then
+            Result := CompareUnknowns(IUnknown(TVarData(left).VUnknown), IUnknown(TVarData(right).VUnknown))
+         else Result := CompareUnknownToVar(IUnknown(TVarData(left).VUnknown), right);
+         Exit;
+      end;
+      varEmpty : begin
+         case VarType(right) of
+            varInt64 : if TVarData(right).VInt64 = 0 then Exit(vrEqual) else Exit(vrNotEqual);
+            varUString : if TVarData(right).VUString = nil then Exit(vrEqual) else Exit(vrNotEqual);
+            varDouble : if TVarData(right).VDouble = 0 then Exit(vrEqual) else Exit(vrNotEqual);
+            varEmpty, varNull : Exit(vrEqual);
+         end;
+      end;
+   end;
+   if VarType(right) = varUnknown then
       Result := CompareVarToUnknown(left, IUnknown(TVarData(right).VUnknown))
    else Result := VarCompareValue(left, right);
 end;
@@ -2898,29 +2922,6 @@ begin
    end;
 end;
 
-// FastCompareFloat
-//
-function FastCompareFloat(d1, d2 : PDouble) : Integer;
-{$ifdef WIN32_ASM}
-asm
-   fld      qword ptr [edx]
-   fld      qword ptr [eax]
-   xor      eax, eax
-   fcomip   st, st(1)
-   setnbe   cl
-   setb     al
-   and      ecx, 1
-   neg      eax
-   or       eax, ecx
-   fstp     st(0)
-{$else}
-begin
-   if d1^<d2^ then
-      Result:=-1
-   else Result:=Ord(d1^>d2^);
-{$endif}
-end;
-
 // RawByteStringToScriptString
 //
 function RawByteStringToScriptString(const s : RawByteString) : UnicodeString;
@@ -2969,27 +2970,6 @@ begin
       n := Length(s);
       SetLength(Result, n);
       WordsToBytes(Pointer(s), Pointer(Result), n);
-   end;
-end;
-
-// WordsToBytes
-//
-procedure WordsToBytes(src : PWord; dest : PByte; nbWords : Integer);
-begin
-   while nbWords >= 4 do begin
-      Dec(nbWords, 4);
-      dest[0] := PWordArray(src)[0];
-      dest[1] := PWordArray(src)[1];
-      dest[2] := PWordArray(src)[2];
-      dest[3] := PWordArray(src)[3];
-      Inc(dest, 4);
-      Inc(src, 4);
-   end;
-   while nbWords > 0 do begin
-      Dec(nbWords);
-      dest[0] := PWordArray(src)[0];
-      Inc(dest);
-      Inc(src);
    end;
 end;
 
@@ -4833,6 +4813,13 @@ begin
    WriteBuf(@dw, 4);
 end;
 
+// WriteQWord
+//
+procedure TWriteOnlyBlockStream.WriteQWord(const qw : UInt64);
+begin
+   WriteBuf(@qw, 8);
+end;
+
 // WriteP
 //
 procedure TWriteOnlyBlockStream.WriteP(p : PWideChar; nbWideChars : Integer);
@@ -6028,6 +6015,21 @@ end;
 // ------------------
 // ------------------ TRefCountedObject ------------------
 // ------------------
+
+{$ifdef DOUBLE_FREE_PROTECTOR}
+constructor TRefCountedObject.Create;
+begin
+   inherited;
+   FDoubleFreeProtector := $0102030405060708;
+end;
+
+destructor TRefCountedObject.Destroy;
+begin
+   Assert(FDoubleFreeProtector = $0102030405060708, ClassName);
+   FDoubleFreeProtector := $0807060504030201;
+   inherited;
+end;
+{$endif}
 
 // Free
 //

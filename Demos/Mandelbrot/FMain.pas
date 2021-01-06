@@ -5,10 +5,14 @@ interface
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, ExtCtrls, StdCtrls,
-  {$ifndef WIN64}
+  {$ifdef WIN32}
   dwsJIT, dwsJITx86,
   {$endif}
-  dwsComp, dwsExprs, dwsFunctions, dwsSymbols, dwsMagicExprs, dwsExprList;
+  {$ifdef WIN64}
+  dwsJIT, dwsJITx86_64,
+  {$endif}
+  dwsComp, dwsExprs, dwsFunctions, dwsSymbols, dwsMagicExprs, dwsExprList,
+  dwsErrors, dwsUtils;
 
 type
   TMainForm = class(TForm)
@@ -247,21 +251,18 @@ const
       +'   end;'#13#10
       +'end;'
    ;
-
+type
+   TJitter = {$ifdef WIN32}TdwsJITx86{$endif}{$ifdef WIN64}TdwsJITx86_64{$endif};
 var
    prog : IdwsProgram;
-   {$ifndef WIN64}
-   jitter : TdwsJITx86;
-   {$endif}
+   jitter : TJitter;
 begin
    prog:=DelphiWebScript.Compile(cSource);
 
-   {$ifndef WIN64}
-   jitter:=TdwsJITx86.Create;
-   jitter.Options:=jitter.Options-[jitoNoBranchAlignment];
+   jitter := TJitter.Create;
+   jitter.Options := jitter.Options-[jitoNoBranchAlignment];
    jitter.GreedyJIT(prog.ProgramObject);
    jitter.Free;
-   {$endif}
 
    if prog.Msgs.Count=0 then
       prog.Execute

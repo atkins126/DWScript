@@ -24,8 +24,8 @@ unit dwsSymbols;
 interface
 
 uses SysUtils, Classes, System.Math, TypInfo,
-   dwsStrings, dwsErrors, dwsUtils, dwsDateTime, dwsScriptSource, dwsSpecialKeywords,
-   dwsTokenizer, dwsStack, dwsXPlatform, dwsDataContext, dwsArrayMethodKinds
+   dwsErrors, dwsUtils, dwsDateTime, dwsScriptSource, dwsSpecialKeywords,
+   dwsTokenTypes, dwsStack, dwsDataContext, dwsArrayMethodKinds
    {$ifdef FPC},LazUTF8{$endif};
 
 type
@@ -692,7 +692,7 @@ type
          procedure InitData(const data : TData; offset : Integer); virtual;
          procedure InitDataContext(const data : IDataContext); inline;
          procedure InitVariant(var v : Variant); virtual;
-         class function DynamicInitialization : Boolean; virtual;
+         function DynamicInitialization : Boolean; virtual;
 
          function IsType : Boolean; override;
          function BaseType : TTypeSymbol; override;
@@ -1225,7 +1225,7 @@ type
          constructor Create(const name : String; elementType, indexType : TTypeSymbol);
          destructor Destroy; override;
 
-         class function DynamicInitialization : Boolean; override;
+         function DynamicInitialization : Boolean; override;
 
          function AssignsAsDataExpr : Boolean; override;
 
@@ -1313,7 +1313,7 @@ type
 
          procedure InitData(const Data: TData; Offset: Integer); override;
          procedure InitVariant(var v : Variant); override;
-         class function DynamicInitialization : Boolean; override;
+         function DynamicInitialization : Boolean; override;
 
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
          function IsPointerType : Boolean; override;
@@ -1531,7 +1531,13 @@ type
          property NextField : TFieldSymbol read FNextField write FNextField;
    end;
 
-   TRecordSymbolFlag = (rsfDynamic, rsfFullyDefined, rsfImmutable, rsfExternal);
+   TRecordSymbolFlag = (
+      rsfDynamic,                // indicates some fields have non-constant initialization expressions (for anonymous records)
+      rsfFullyDefined,           // set when the declaration is complete
+      rsfImmutable,              // immutable record, cannot be altered at runtime
+      rsfExternal,               // external record
+      rsfDynamicInitialization   // contains fields that require dynamic initialization (dynamic arrays...)
+      );
    TRecordSymbolFlags = set of TRecordSymbolFlag;
 
    // record member1: Integer; member2: Integer end;
@@ -1565,6 +1571,7 @@ type
                                         isClassMethod : Boolean) : TMethodSymbol; override;
 
          procedure InitData(const data : TData; offset : Integer); override;
+         function DynamicInitialization : Boolean; override;
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
          function AssignsAsDataExpr : Boolean; override;
 
@@ -2069,6 +2076,7 @@ type
          property SelfScriptClassSymbol : TClassSymbol read FSelfScriptClassSymbol write FSelfScriptClassSymbol;
 
          class function Status_Offset : Integer;
+         class function StackMixin_Offset : Integer;
 
          function GetLastScriptErrorExpr : TExprBase;
          procedure SetScriptError(expr : TExprBase);
@@ -2151,6 +2159,11 @@ type
       property ClassSym : TClassSymbol read GetClassSym;
       property ExternalObject : TObject read GetExternalObject write SetExternalObject;
       property Destroyed : Boolean read GetDestroyed write SetDestroyed;
+
+      function FieldAsString(const fieldName : String) : String;
+      function FieldAsInteger(const fieldName : String) : Int64;
+      function FieldAsFloat(const fieldName : String) : Double;
+      function FieldAsBoolean(const fieldName : String) : Boolean;
    end;
 
    // IScriptObjInterface
@@ -2232,7 +2245,7 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsCompilerUtils;
+uses dwsCompilerUtils, dwsStrings, dwsXPlatform;
 
 // ------------------
 // ------------------ TdwsExprLocation ------------------
@@ -2488,6 +2501,7 @@ end;
 //
 constructor TSymbol.Create(const aName : String; aType : TTypeSymbol);
 begin
+   inherited Create;
    FName:=aName;
    FTyp:=aType;
    if Assigned(aType) then
@@ -3139,10 +3153,12 @@ end;
 procedure TRecordSymbol.AddField(fieldSym : TFieldSymbol);
 begin
    inherited;
-   fieldSym.FOffset:=FSize;
-   FSize:=FSize+fieldSym.Typ.Size;
-   if fieldSym.DefaultExpr<>nil then
-      IsDynamic:=True;
+   fieldSym.FOffset := FSize;
+   FSize := FSize + fieldSym.Typ.Size;
+   if fieldSym.DefaultExpr <> nil then
+      IsDynamic := True;
+   if fieldSym.Typ.DynamicInitialization then
+      Include(FFlags, rsfDynamicInitialization);
 end;
 
 // AddMethod
@@ -3201,6 +3217,13 @@ begin
       field.InitData(data, offset);
       field:=field.NextField;
    end;
+end;
+
+// DynamicInitialization
+//
+function TRecordSymbol.DynamicInitialization : Boolean;
+begin
+   Result := rsfDynamicInitialization in FFlags;
 end;
 
 // IsCompatible
@@ -6005,6 +6028,7 @@ end;
 //
 constructor TValueSymbol.Create(const aName : String; aType : TTypeSymbol);
 begin
+   inherited;
    FName := aName;
    FTyp:=aType;
    FSize:=aType.Size;
@@ -6397,6 +6421,7 @@ end;
 //
 constructor TSymbolTable.Create(Parent: TSymbolTable; AddrGenerator: TAddrGenerator);
 begin
+   inherited Create;
    FAddrGenerator := AddrGenerator;
    if Assigned(Parent) then
       AddParent(Parent);
@@ -7358,7 +7383,7 @@ end;
 
 // DynamicInitialization
 //
-class function TArraySymbol.DynamicInitialization : Boolean;
+function TArraySymbol.DynamicInitialization : Boolean;
 begin
    Result := True;
 end;
@@ -7773,7 +7798,7 @@ end;
 
 // DynamicInitialization
 //
-class function TAssociativeArraySymbol.DynamicInitialization : Boolean;
+function TAssociativeArraySymbol.DynamicInitialization : Boolean;
 begin
    Result := True;
 end;
@@ -8257,7 +8282,7 @@ end;
 
 // DynamicInitialization
 //
-class function TTypeSymbol.DynamicInitialization : Boolean;
+function TTypeSymbol.DynamicInitialization : Boolean;
 begin
    Result:=False;
 end;
@@ -8380,13 +8405,15 @@ end;
 // Status_Offset
 //
 class function TdwsExecution.Status_Offset : Integer;
-{$ifdef WIN32_ASM}
-asm
-   mov eax, OFFSET FStatus
-{$else}
 begin
-   Result:=0;
-{$endif}
+   Result := IntPtr(@TdwsExecution(nil).FStatus);
+end;
+
+// StackMixin_Offset
+//
+class function TdwsExecution.StackMixin_Offset : Integer;
+begin
+   Result := IntPtr(@TdwsExecution(nil).FStack);
 end;
 
 // GetLastScriptErrorExpr
@@ -8849,7 +8876,7 @@ end;
 //
 function TResolvedInterfaces.GetItemHashCode(const item1 : TResolvedInterface) : Cardinal;
 begin
-   Result := Cardinal(NativeUInt(item1.IntfSymbol) shr 4);
+   Result := SimplePointerHash(item1.IntfSymbol);
 end;
 
 // ------------------
