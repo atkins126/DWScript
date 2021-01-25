@@ -37,6 +37,8 @@ type
          procedure SortFixups;
          procedure ResolveFixups;
 
+         procedure AfterResolve; virtual;
+
       public
          constructor Create;
          destructor Destroy; override;
@@ -46,8 +48,8 @@ type
          function  NewTarget(align : Boolean) : TFixupTarget;
          function  NewHangingTarget(align : Boolean) : TFixupTarget; virtual;
 
-         procedure FlushFixups(const rawCode : TBytes; outStream : Tx86BaseWriteOnlyStream);
-         procedure ClearFixups;
+         procedure FlushFixups(const rawCode : TBytes; outStream : Tx86BaseWriteOnlyStream); virtual;
+         procedure ClearFixups; virtual;
 
          property Base : TFixup read FBase write FBase;
          property OnNeedLocation : TFixupNeedLocationEvent read FOnNeedLocation write FOnNeedLocation;
@@ -273,6 +275,15 @@ begin
          fixup:=fixup.Next;
       end;
    until not changed;
+
+   AfterResolve;
+end;
+
+// AfterResolve
+//
+procedure TFixupLogic.AfterResolve;
+begin
+   // nothing here
 end;
 
 // FlushFixups
@@ -336,12 +347,6 @@ begin
    if Result=0 then
       Result:=item2.FOrder-item1.FOrder;
 end;
-
-// ------------------
-// ------------------ TFixup ------------------
-// ------------------
-
-
 
 // ------------------
 // ------------------ TFixupTarget ------------------

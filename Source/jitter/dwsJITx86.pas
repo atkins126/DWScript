@@ -28,7 +28,7 @@ interface
 uses
    Classes, SysUtils, Math, Windows,
    dwsExprs, dwsSymbols, dwsErrors, dwsUtils, dwsExprList, dwsXPlatform,
-   dwsCoreExprs, dwsRelExprs, dwsMagicExprs, dwsConstExprs,
+   dwsCoreExprs, dwsRelExprs, dwsMagicExprs, dwsConstExprs, dwsArrayExprs,
    dwsMathFunctions, dwsDataContext, dwsConvExprs, dwsSetOfExprs, dwsMethodExprs,
    dwsJIT, dwsJITFixups, dwsJITAllocatorWin, dwsJITx86Intrinsics, dwsVMTOffsets;
 
@@ -2109,15 +2109,16 @@ begin
    jit.Fixups.AddFixup(targetTrue);
 
    jit.CompileStatement(e.ThenExpr);
+   jit.ResetXMMReg;
+
    jit.Fixups.NewJump(flagsNone, targetDone);
 
    jit.Fixups.AddFixup(targetFalse);
 
    jit.CompileStatement(e.ElseExpr);
+   jit.ResetXMMReg;
 
    jit.Fixups.AddFixup(targetDone);
-
-   jit.ResetXMMReg;
 end;
 
 // ------------------

@@ -68,11 +68,16 @@ type
       procedure EvalAsString(addr : Integer; var result : String);
       procedure EvalAsInterface(addr : Integer; var result : IUnknown);
 
+      function IsEmpty(addr : Integer) : Boolean;
+      function VarType(addr : Integer) : TVarType;
+
       procedure CopyData(const destData : TData; destAddr, size : Integer);
       procedure WriteData(const src : IDataContext; size : Integer); overload;
       procedure WriteData(destAddr : Integer; const src : IDataContext; size : Integer); overload;
       procedure WriteData(const srcData : TData; srcAddr, size : Integer); overload;
       function  SameData(addr : Integer; const otherData : TData; otherAddr, size : Integer) : Boolean;
+
+      function  IncInteger(addr : Integer; delta : Int64) : Int64;
 
       function  HashCode(size : Integer) : Cardinal;
    end;
@@ -154,6 +159,9 @@ type
          property  AsString[addr : Integer] : String read GetAsString write SetAsString;
          property  AsInterface[addr : Integer] : IUnknown read GetAsInterface write SetAsInterface;
 
+         function IsEmpty(addr : Integer) : Boolean;
+         function VarType(addr : Integer) : TVarType; virtual;
+
          procedure InternalCopyData(sourceAddr, destAddr, size : Integer); inline;
 
          procedure CopyData(const destData : TData; destAddr, size : Integer); overload; inline;
@@ -178,6 +186,8 @@ type
          procedure ReplaceData(const newData : TData); virtual;
          procedure ClearData; virtual;
          procedure SetDataLength(n : Integer);
+
+         function  IncInteger(addr : Integer; delta : Int64) : Int64;
 
          function  HashCode(size : Integer) : Cardinal;
    end;
@@ -219,11 +229,16 @@ type
          procedure EvalAsString(addr : Integer; var result : String);
          procedure EvalAsInterface(addr : Integer; var result : IUnknown);
 
+         function IsEmpty(addr : Integer) : Boolean;
+         function VarType(addr : Integer) : TVarType;
+
          procedure CopyData(const destData : TData; destAddr, size : Integer);
          procedure WriteData(const src : IDataContext; size : Integer); overload;
          procedure WriteData(destAddr : Integer; const src : IDataContext; size : Integer); overload;
          procedure WriteData(const srcData : TData; srcAddr, size : Integer); overload;
          function SameData(addr : Integer; const otherData : TData; otherAddr, size : Integer) : Boolean; overload;
+
+         function  IncInteger(addr : Integer; delta : Int64) : Int64;
 
          function  HashCode(size : Integer) : Cardinal;
    end;
@@ -442,6 +457,17 @@ begin
       Inc(p);
    end;
    Assert(Result <> 0);
+end;
+
+// DWSVarIsEmpty
+//
+function DWSVarIsEmpty(const v : Variant) : Boolean; inline;
+begin
+   Result :=    (TVarData(v).VType = varEmpty)
+             or (
+                     (TVarData(v).VType = varUnknown)
+                 and (TVarData(v).VUnknown = nil)
+                );
 end;
 
 // ------------------
@@ -774,6 +800,20 @@ begin
    else result:=PVariant(p)^;
 end;
 
+// IsEmpty
+//
+function TDataContext.IsEmpty(addr : Integer) : Boolean;
+begin
+   Result := DWSVarIsEmpty(FData[FAddr+addr]);
+end;
+
+// VarType
+//
+function TDataContext.VarType(addr : Integer) : TVarType;
+begin
+   Result := VarType(FData[FAddr+addr]);
+end;
+
 // InternalCopyData
 //
 procedure TDataContext.InternalCopyData(sourceAddr, destAddr, size : Integer);
@@ -806,21 +846,37 @@ end;
 //
 procedure TDataContext.WriteData(const src : IDataContext; size : Integer);
 begin
-   DWSCopyPVariants(src.AsPVariant(0), @FData[FAddr], size);
+   WriteData(src, 0, size);
 end;
 
 // WriteData
 //
 procedure TDataContext.WriteData(const src : IDataContext; srcAddr, size : Integer);
+var
+   i : Integer;
+   pDest : PVariant;
 begin
-   DWSCopyData(src.AsPData^, srcAddr, Fdata, FAddr, size);
+   Assert(FAddr + size <= Length(FData));
+   pDest := @FData[FAddr];
+   for i := srcAddr to srcAddr + size-1 do begin
+      src.EvalAsVariant(i, pDest^);
+      Inc(pDest);
+   end;
 end;
 
 // WriteData
 //
 procedure TDataContext.WriteData(destAddr : Integer; const src : IDataContext; size : Integer);
+var
+   i : Integer;
+   pDest : PVariant;
 begin
-   DWSCopyData(src.AsPData^, src.Addr, FData, FAddr+destAddr, size);
+   Assert(FAddr + destAddr + size <= Length(FData));
+   pDest := @FData[FAddr + destAddr];
+   for i := 0 to size-1 do begin
+      src.EvalAsVariant(i, pDest^);
+      Inc(pDest);
+   end;
 end;
 
 // WriteData
@@ -943,6 +999,18 @@ end;
 procedure TDataContext.SetDataLength(n : Integer);
 begin
    SetLength(FData, n);
+end;
+
+// IncInteger
+//
+function TDataContext.IncInteger(addr : Integer; delta : Int64) : Int64;
+var
+   p : PVarData;
+begin
+   p := @FData[FAddr+addr];
+   Assert(p.VType = varInt64);
+   Result := p.VInt64 + delta;
+   p.VInt64 := Result;
 end;
 
 // HashCode
@@ -1111,6 +1179,20 @@ begin
    result := FGetPData^[FAddr+addr];
 end;
 
+// IsEmpty
+//
+function TRelativeDataContext.IsEmpty(addr : Integer) : Boolean;
+begin
+   Result := DWSVarIsEmpty(FGetPData^[FAddr+addr]);
+end;
+
+// VarType
+//
+function TRelativeDataContext.VarType(addr : Integer) : TVarType;
+begin
+   Result := VarType(FGetPData^[FAddr+addr]);
+end;
+
 // CopyData
 //
 procedure TRelativeDataContext.CopyData(const destData : TData; destAddr, size : Integer);
@@ -1144,6 +1226,18 @@ end;
 function TRelativeDataContext.SameData(addr : Integer; const otherData : TData; otherAddr, size : Integer) : Boolean;
 begin
    Result:=DWSSameData(FGetPData^, otherData, FAddr+addr, otherAddr, size);
+end;
+
+// IncInteger
+//
+function TRelativeDataContext.IncInteger(addr : Integer; delta : Int64) : Int64;
+var
+   p : PVarData;
+begin
+   p := @FGetPData^[FAddr+addr];
+   Assert(p.VType = varInt64);
+   Result := p.VInt64 + delta;
+   p.VInt64 := Result;
 end;
 
 // HashCode

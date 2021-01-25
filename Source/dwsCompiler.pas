@@ -33,7 +33,7 @@ uses
   dwsOperators, dwsPascalTokenizer, dwsSystemOperators, dwsContextMap,
   dwsUnitSymbols, dwsCompilerUtils, dwsScriptSource, dwsSymbolDictionary,
   dwsCompilerContext, dwsGenericSymbols, dwsSpecializationContext,
-  dwsGenericExprs, dwsSpecialKeywords;
+  dwsGenericExprs, dwsSpecialKeywords, dwsArrayExprs;
 
 const
    cDefaultCompilerOptions = [ coOptimize, coAssertions ];
@@ -13643,6 +13643,8 @@ var
    amk : TArrayMethodKind;
 begin
    msgExpr:=nil;
+
+   RecordSymbolUseReference(FCompilerContext.SpecialSymbol(specialKind), namePos, False);
 
    if specialKind=skDebugBreak then begin
 

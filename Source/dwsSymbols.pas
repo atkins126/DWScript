@@ -2164,6 +2164,7 @@ type
       function FieldAsInteger(const fieldName : String) : Int64;
       function FieldAsFloat(const fieldName : String) : Double;
       function FieldAsBoolean(const fieldName : String) : Boolean;
+      function FieldAsScriptDynArray(const fieldName : String) : IScriptDynArray;
    end;
 
    // IScriptObjInterface
@@ -2175,7 +2176,7 @@ type
 
    // IScriptDynArray
    //
-   IScriptDynArray = interface (IDataContext)
+   IScriptDynArray = interface (IGetSelf)//(IDataContext)//
       ['{29767B6E-05C0-40E1-A41A-94DF54142312}']
       function GetElementSize : Integer;
       property ElementSize : Integer read GetElementSize;
@@ -2188,10 +2189,41 @@ type
 
       function ToStringArray : TStringDynArray;
       function ToInt64Array : TInt64DynArray;
+      function ToData : TData;
 
       procedure ReplaceData(const v : TData);
 
       procedure Reverse;
+
+      function AsPData : PData;
+      function AsPVariant(addr : Integer) : PVariant;
+
+      function AsPDouble(var nbElements, stride : Integer) : PDouble;
+
+      function GetAsFloat(index : Integer) : Double;
+      procedure SetAsFloat(index : Integer; const v : Double);
+      property AsFloat[index : Integer] : Double read GetAsFloat write SetAsFloat;
+
+      function GetAsInteger(index : Integer) : Int64;
+      procedure SetAsInteger(index : Integer; const v : Int64);
+      property AsInteger[index : Integer] : Int64 read GetAsInteger write SetAsInteger;
+
+      function GetAsBoolean(index : Integer) : Boolean;
+      procedure SetAsBoolean(index : Integer; const v : Boolean);
+      property AsBoolean[index : Integer] : Boolean read GetAsBoolean write SetAsBoolean;
+
+      procedure SetAsVariant(index : Integer; const v : Variant);
+      procedure SetAsString(index : Integer; const v : String);
+      procedure SetAsInterface(index : Integer; const v : IUnknown);
+
+      procedure EvalAsVariant(index : Integer; var result : Variant);
+      procedure EvalAsString(index : Integer; var result : String);
+      procedure EvalAsInterface(index : Integer; var result : IUnknown);
+
+      function IsEmpty(addr : Integer) : Boolean;
+      function VarType(addr : Integer) : TVarType;
+
+      function HashCode(addr : Integer; size : Integer) : Cardinal;
    end;
 
    // IScriptAssociativeArray
@@ -8406,6 +8438,7 @@ end;
 //
 class function TdwsExecution.Status_Offset : Integer;
 begin
+   Assert(SizeOf(TdwsExecution(nil).FStatus) = 1);
    Result := IntPtr(@TdwsExecution(nil).FStatus);
 end;
 
