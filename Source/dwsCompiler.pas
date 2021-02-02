@@ -279,7 +279,7 @@ type
       function ConvertToMagicSymbol(value: TFuncSymbol) : TFuncSymbol;
       function CreateExternalFunction(funcSymbol : TFuncSymbol) : IExternalRoutine;
 
-      procedure RegisterExternalFunction(const name: String; address: pointer);
+      procedure RegisterExternalFunction(const name: String; address: pointer; ignoreIfMissing : Boolean = False);
       procedure RegisterTypeMapping(const name: String; const typ: TTypeLookupData);
    end;
 
@@ -605,6 +605,7 @@ type
          procedure ReadProcCallQualifiers(funcSymbol : TFuncSymbol);
          procedure AdaptParametersSymPos(guess, actual : TFuncSymbol; const useTypes : TSymbolUsages;
                                          var posArray : TScriptPosArray);
+         function ReadProcDeclAsync(const hotPos : TScriptPos) : TFuncSymbol;
          function ReadProcDecl(funcToken : TTokenType; const hotPos : TScriptPos;
                                declOptions : TdwsReadProcDeclOptions = [];
                                expectedLambdaParams : TParamsSymbolTable = nil) : TFuncSymbol;
@@ -872,6 +873,8 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
+
+uses dwsArrayIndexOfExprs;
 
 const
    cSwitchInstructions : array [TSwitchInstruction] of String = (
@@ -2545,7 +2548,7 @@ begin
 
    token:=FTok.TestDeleteAny([ttTYPE, ttPROCEDURE, ttFUNCTION,
                               ttCONSTRUCTOR, ttDESTRUCTOR, ttMETHOD, ttCLASS,
-                              ttUSES, ttIMPLEMENTATION, ttEND]);
+                              ttUSES, ttIMPLEMENTATION, ttEND, ttASYNC]);
    case token of
       ttTYPE : begin
          if UnitSection in [secInterface, secImplementation] then
@@ -2553,6 +2556,8 @@ begin
          else ReadTypeDecl(True);
          action:=saNoSemiColon
       end;
+      ttASYNC :
+         ReadProcBody(ReadProcDeclAsync(hotPos));
       ttPROCEDURE, ttFUNCTION, ttCONSTRUCTOR, ttDESTRUCTOR, ttMETHOD :
          ReadProcBody(ReadProcDecl(token, hotPos));
       ttCLASS : begin
@@ -3468,6 +3473,26 @@ begin
                guessSymPosList.Delete(guessSymPosList.Count-1);
          end;
       end;
+   end;
+end;
+
+// ReadProcDeclAsync
+//
+function TdwsCompiler.ReadProcDeclAsync(const hotPos : TScriptPos) : TFuncSymbol;
+var
+   token : TTokenType;
+begin
+   if not (coAllowAsyncAwait in FCompilerContext.Options) then
+      FMsgs.AddCompilerError(hotPos, CPE_AsyncNotSupported);
+   token := FTok.TestDeleteAny([ttPROCEDURE, ttFUNCTION]);
+   case token of
+      ttPROCEDURE, ttFUNCTION : begin
+         Result := ReadProcDecl(token, hotPos);
+         Result.IsAsync := True;
+      end;
+   else
+      FMsgs.AddCompilerStop(FTok.HotPos, CPE_ProcOrFuncExpected);
+      Result := nil;
    end;
 end;
 
@@ -7941,9 +7966,7 @@ begin
 
             amkIndexOf : begin
                CheckDynamicOrStatic;
-               if arraySym.ClassType = TDynamicArraySymbol then
-                  indexOfClass := TDynamicArrayIndexOfExpr
-               else indexOfClass := TStaticArrayIndexOfExpr;
+               indexOfClass := TArrayIndexOfExpr.ArrayIndexOfExprClass(arraySym);
                if CheckArguments(1, 2) then begin
                   if (argList[0].Typ=nil) or not arraySym.Typ.IsCompatible(argList[0].Typ) then
                      IncompatibleTypes(argPosArray[0], CPE_IncompatibleParameterTypes,
@@ -10961,6 +10984,7 @@ var
    classOpSymbol : TClassOperatorSymbol;
    classOpExpr : TFuncExprBase;
    argPosArray : TScriptPosArray;
+   indexOfExprClass : TArrayIndexOfExprClass;
 begin
    hotPos:=FTok.HotPos;
 
@@ -10995,10 +11019,9 @@ begin
                end;
             end;
 
-            if setExpr.Typ is TDynamicArraySymbol then
-               Result := TDynamicArrayIndexOfExpr.Create(FCompilerContext, hotPos, setExpr, left, nil)
-            else begin
-               Result := TStaticArrayIndexOfExpr.Create(FCompilerContext, hotPos, setExpr, left, nil);
+            indexOfExprClass := TArrayIndexOfExpr.ArrayIndexOfExprClass(setExpr.Typ as TArraySymbol);
+            Result := indexOfExprClass.Create(FCompilerContext, hotPos, setExpr, left, nil);
+            if indexOfExprClass.InheritsFrom(TStaticArrayIndexOfExpr) then begin
                TStaticArrayIndexOfExpr(Result).ForceZeroBased := True;
                if setExpr.Typ.ClassType <> TStaticArraySymbol then
                   FMsgs.AddCompilerError(hotPos, CPE_IncompatibleOperands);
@@ -11155,6 +11178,18 @@ function TdwsCompiler.ReadTerm(isWrite : Boolean = False; expecting : TTypeSymbo
             FMsgs.AddCompilerError(hotPos, CPE_BooleanOrIntegerExpected);
          Result:=TNotVariantExpr.Create(FCompilerContext, hotPos, operand);
       end;
+   end;
+
+   function ReadAwaitTerm : TUnaryOpExpr;
+   var
+      operand : TTypedExpr;
+      hotPos : TScriptPos;
+   begin
+      hotPos := FTok.HotPos;
+      if not (coAllowAsyncAwait in Compiler.Options) then
+         FMsgs.AddCompilerError(hotPos, CPE_AwaitNotSupported);
+      operand := ReadTerm(False, FCompilerContext.TypAnyType);
+      Result := TAwaitExpr.Create(FCompilerContext, hotPos, operand);
    end;
 
    function ReadNull(expecting : TTypeSymbol) : TConstExpr;
@@ -11375,7 +11410,7 @@ var
 begin
    tt := FTok.TestAny([ ttPLUS, ttMINUS, ttALEFT, ttNOT, ttBLEFT, ttAT,
                         ttTRUE, ttFALSE, ttNIL, ttIF,
-                        ttFUNCTION, ttPROCEDURE, ttLAMBDA,
+                        ttFUNCTION, ttPROCEDURE, ttLAMBDA, ttAWAIT,
                         ttRECORD, ttCLASS,
                         ttBRIGHT,
                         ttPLUS_PLUS, ttMINUS_MINUS ]);
@@ -11446,6 +11481,10 @@ begin
       ttLAMBDA : begin
          FTok.KillToken;
          Result := ReadLambda(tt, FTok.HotPos);
+      end;
+      ttAWAIT : begin
+         FTok.KillToken;
+         Result := ReadAwaitTerm;
       end;
       ttRECORD : begin
          FTok.KillToken;

@@ -787,7 +787,7 @@ type
 
    TFuncSymbolFlag = (fsfStateless, fsfExternal, fsfType, fsfOverloaded, fsfLambda,
                       fsfInline, fsfProperty, fsfExport,
-                      fsfOfObject, fsfReferenceTo);
+                      fsfOfObject, fsfReferenceTo, fsfAsync);
    TFuncSymbolFlags = set of TFuncSymbolFlag;
 
    // A script function / procedure: procedure X(param: Integer);
@@ -828,6 +828,8 @@ type
          procedure SetIsOfObject(const val : Boolean); inline;
          function GetIsReferenceTo : Boolean; inline;
          procedure SetIsReferenceTo(const val : Boolean); inline;
+         function GetIsAsync : Boolean; inline;
+         procedure SetIsAsync(const val : Boolean); inline;
 
          function GetSourcePosition : TScriptPos; virtual;
          procedure SetSourcePosition(const val : TScriptPos); virtual;
@@ -883,6 +885,7 @@ type
          property IsProperty : Boolean read GetIsProperty write SetIsProperty;
          property IsOfObject : Boolean read GetIsOfObject write SetIsOfObject;
          property IsReferenceTo : Boolean read GetIsReferenceTo write SetIsReferenceTo;
+         property IsAsync : Boolean read GetIsAsync write SetIsAsync;
          property Kind : TFuncKind read FKind write FKind;
          property ExternalName : String read GetExternalName write FExternalName;
          function HasExternalName : Boolean;
@@ -2191,6 +2194,8 @@ type
       function ToInt64Array : TInt64DynArray;
       function ToData : TData;
 
+      procedure Insert(index : Integer);
+
       procedure ReplaceData(const v : TData);
 
       procedure Reverse;
@@ -2213,12 +2218,16 @@ type
       property AsBoolean[index : Integer] : Boolean read GetAsBoolean write SetAsBoolean;
 
       procedure SetAsVariant(index : Integer; const v : Variant);
-      procedure SetAsString(index : Integer; const v : String);
-      procedure SetAsInterface(index : Integer; const v : IUnknown);
-
       procedure EvalAsVariant(index : Integer; var result : Variant);
+      property AsVariant[index : Integer] : Variant write SetAsVariant;
+
+      procedure SetAsString(index : Integer; const v : String);
       procedure EvalAsString(index : Integer; var result : String);
+      property AsString[index : Integer] : String write SetAsString;
+
+      procedure SetAsInterface(index : Integer; const v : IUnknown);
       procedure EvalAsInterface(index : Integer; var result : IUnknown);
+      property AsInterface[index : Integer] : IUnknown write SetAsInterface;
 
       function IsEmpty(addr : Integer) : Boolean;
       function VarType(addr : Integer) : TVarType;
@@ -4014,6 +4023,22 @@ begin
    if val then
       Include(FFlags, fsfReferenceTo)
    else Exclude(FFlags, fsfReferenceTo);
+end;
+
+// GetIsAsync
+//
+function TFuncSymbol.GetIsAsync : Boolean;
+begin
+   Result := (fsfAsync in FFlags);
+end;
+
+// SetIsAsync
+//
+procedure TFuncSymbol.SetIsAsync(const val : Boolean);
+begin
+   if val then
+      Include(FFlags, fsfAsync)
+   else Exclude(FFlags, fsfAsync);
 end;
 
 // GetSourcePosition

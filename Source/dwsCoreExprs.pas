@@ -797,6 +797,12 @@ type
          procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
    end;
 
+   // await
+   TAwaitExpr = class (TUnaryOpVariantExpr)
+      public
+         procedure EvalAsVariant(exec : TdwsExecution; var result : Variant); override;
+   end;
+
    // Assert(condition, message);
    TAssertExpr = class sealed (TNoResultExpr)
       protected
@@ -5068,6 +5074,17 @@ begin
 end;
 
 // ------------------
+// ------------------ TAwaitExpr ------------------
+// ------------------
+
+// EvalAsVariant
+//
+procedure TAwaitExpr.EvalAsVariant(exec : TdwsExecution; var result : Variant);
+begin
+   raise Exception.Create(CPE_AwaitNotSupported);
+end;
+
+// ------------------
 // ------------------ TAssignExpr ------------------
 // ------------------
 
@@ -5392,7 +5409,7 @@ end;
 procedure TAssignArrayConstantExpr.EvalNoResult(exec : TdwsExecution);
 var
    dynIntf : IScriptDynArray;
-   dynObj : TScriptDynamicArray;
+   dynObj : IScriptDynArray;
    srcData : TData;
    dataPtr : IDataContext;
 begin
@@ -5408,7 +5425,7 @@ begin
          dynObj:=TScriptDynamicArray(dynIntf.GetSelf);
       end;
       dynObj.ArrayLength := Length(srcData) div dynObj.ElementSize;
-      dynObj.WriteData(srcData, 0, Length(srcData));
+      (dynObj.GetSelf as TScriptDynamicArray).WriteData(srcData, 0, Length(srcData));
    end else begin
       // to static array
       exec.DataContext_Create(srcData, 0, dataPtr);

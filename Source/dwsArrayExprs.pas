@@ -596,65 +596,6 @@ type
          property CountExpr : TTypedExpr read FCountExpr;
    end;
 
-   // Find element in a dynamic array (shallow comparison)
-   TArrayIndexOfExpr = class(TArrayTypedExpr)
-      private
-         FItemExpr : TTypedExpr;
-         FFromIndexExpr : TTypedExpr;
-
-      protected
-         function GetSubExpr(i : Integer) : TExprBase; override;
-         function GetSubExprCount : Integer; override;
-
-      public
-         constructor Create(context : TdwsCompilerContext; const scriptPos : TScriptPos;
-                            aBase : TTypedExpr; aItem : TTypedExpr; aFromIndex : TTypedExpr); reintroduce; virtual;
-         destructor Destroy; override;
-
-         procedure EvalAsVariant(exec : TdwsExecution; var Result : Variant); override;
-
-         property ItemExpr : TTypedExpr read FItemExpr;
-         property FromIndexExpr : TTypedExpr read FFromIndexExpr;
-   end;
-
-   TArrayIndexOfExprClass = class of TArrayIndexOfExpr;
-
-   TDynamicArrayIndexOfMethod = function (exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer of object;
-
-   TDynamicArrayIndexOfExpr = class(TArrayIndexOfExpr)
-      private
-         FMethod : TDynamicArrayIndexOfMethod;
-
-      protected
-         function DoEvalValue(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-         function DoEvalString(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-         function DoEvalInteger(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-         function DoEvalFuncPtr(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-         function DoEvalData(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-
-      public
-         constructor Create(context : TdwsCompilerContext; const scriptPos : TScriptPos;
-                            aBase : TTypedExpr; aItem : TTypedExpr; aFromIndex : TTypedExpr); override;
-
-         function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
-   end;
-
-   TStaticArrayIndexOfExpr = class(TArrayIndexOfExpr)
-      private
-         FForceZeroBased : Boolean;
-
-      public
-         function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
-
-         property ForceZeroBased : Boolean read FForceZeroBased write FForceZeroBased;
-   end;
-
-   // Remove an element in a dynamic array (shallow comparison)
-   TArrayRemoveExpr = class(TDynamicArrayIndexOfExpr)
-      public
-         function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
-   end;
-
    // Insert an element at a given index of a dynamic array
    TArrayInsertExpr = class(TArrayPseudoMethodExpr)
       private
@@ -975,7 +916,7 @@ end;
 //
 procedure TNewArrayExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 
-   function CreateDimension(d : Integer) : TScriptDynamicArray;
+   function CreateDimension(d : Integer) : IScriptDynArray;
    var
       i : Integer;
       n : Int64;
@@ -983,12 +924,12 @@ procedure TNewArrayExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : 
       n:=LengthExpr[d].EvalAsInteger(exec);
       if n<0 then
          RaiseScriptError(exec, EScriptOutOfBounds.CreatePosFmt(ScriptPos, RTE_ArrayLengthIncorrectForDimension, [n, d]));
-      Result:=TScriptDynamicArray.CreateNew(TDynamicArraySymbol(FTyps.List[FTyps.Count-1-d]).Typ);
+      Result := TScriptDynamicArray.CreateNew(TDynamicArraySymbol(FTyps.List[FTyps.Count-1-d]).Typ);
       Result.ArrayLength:=n;
       Inc(d);
       if d<LengthExprCount then begin
          for i:=0 to n-1 do
-            Result.AsInterface[i]:=IScriptDynArray(CreateDimension(d));
+            Result.SetAsInterface(i, CreateDimension(d));
       end;
    end;
 
@@ -2223,10 +2164,9 @@ end;
 //
 procedure TArrayMapExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
-   newArray : TScriptDynamicArray;
    base : IScriptDynArray;
    dyn : TScriptDynamicValueArray;
-   i, itemAddr : Integer;
+   i, itemAddr, elemSize : Integer;
    funcPointer : IFuncPointer;
    newPData, oldPData : PData;
    dc : IDataContext;
@@ -2237,21 +2177,21 @@ begin
    dyn:=TScriptDynamicValueArray(base.GetSelf);
    oldPData:=dyn.AsPData;
 
-   newArray:=TScriptDynamicArray.CreateNew(Typ.Typ);
-   result:=IScriptDynArray(newArray);
-   newArray.ArrayLength:=dyn.ArrayLength;
-   newPData:=newArray.AsPData;
+   result := TScriptDynamicArray.CreateNew(Typ.Typ);
+   result.ArrayLength := dyn.ArrayLength;
+   newPData := result.AsPData;
 
+   elemSize := result.ElementSize;
    itemAddr:=exec.Stack.BasePointer+FItem.StackAddr;
    for i:=0 to dyn.ArrayLength-1 do begin
       if dyn.ElementSize = 1 then
          exec.Stack.WriteValue(itemAddr, oldPData^[i])
       else dyn.CopyData(i*dyn.ElementSize, exec.Stack.Data, itemAddr, dyn.ElementSize);
-      if newArray.ElementSize = 1 then
+      if elemSize = 1 then
          funcPointer.EvalAsVariant(exec, MapFuncExpr, newPData^[i])
       else begin
          dc:=funcPointer.EvalDataPtr(exec,  MapFuncExpr, MapFuncExpr.ResultAddr);
-         dc.CopyData(newPData^, i*newArray.ElementSize, newArray.ElementSize);
+         dc.CopyData(newPData^, i*elemSize, elemSize);
       end;
    end;
 end;
@@ -2428,7 +2368,6 @@ end;
 //
 procedure TArrayFilterExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
-   newArray : TScriptDynamicArray;
    base : IScriptDynArray;
    dyn : TScriptDynamicValueArray;
    i, k, elementSize, itemAddr : Integer;
@@ -2441,11 +2380,10 @@ begin
    dyn := TScriptDynamicValueArray(base.GetSelf);
    oldPData := dyn.AsPData;
 
-   newArray := TScriptDynamicArray.CreateNew(dyn.ElementTyp);
-   result := IScriptDynArray(newArray);
-   newArray.ArrayLength := dyn.ArrayLength;
-   newPData := newArray.AsPData;
-   elementSize := newArray.ElementSize;
+   result := TScriptDynamicArray.CreateNew(dyn.ElementTyp);
+   result.ArrayLength := dyn.ArrayLength;
+   newPData := result.AsPData;
+   elementSize := result.ElementSize;
    k := 0;
 
    itemAddr := exec.Stack.BasePointer + FItem.StackAddr;
@@ -2467,8 +2405,8 @@ begin
       end;
    end;
 
-   if k <> newArray.ArrayLength then
-      newArray.ArrayLength := k;
+   if k <> result.ArrayLength then
+      result.ArrayLength := k;
 end;
 
 // GetSubExpr
@@ -2888,7 +2826,7 @@ end;
 procedure TArrayCopyExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    base : IScriptDynArray;
-   dyn, newDyn : TScriptDynamicArray;
+   dyn : TScriptDynamicArray;
    index, count : Integer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
@@ -2905,10 +2843,9 @@ begin
          count := dyn.ArrayLength-index;
    end else count:=dyn.ArrayLength-index;
 
-   newDyn:=TScriptDynamicArray.CreateNew(dyn.ElementTyp);
+   Result := TScriptDynamicArray.CreateNew(dyn.ElementTyp);
    if count>0 then
-      newDyn.Copy(dyn, index, count);
-   Result:=newDyn;
+      (Result.GetSelf as TScriptDynamicArray).Copy(dyn, index, count);
 end;
 
 // GetSubExpr
@@ -2928,222 +2865,6 @@ end;
 function TArrayCopyExpr.GetSubExprCount : Integer;
 begin
    Result:=3;
-end;
-
-// ------------------
-// ------------------ TArrayIndexOfExpr ------------------
-// ------------------
-
-// Create
-//
-constructor TArrayIndexOfExpr.Create(context : TdwsCompilerContext; const scriptPos : TScriptPos;
-                                            aBase : TTypedExpr; aItem : TTypedExpr; aFromIndex : TTypedExpr);
-begin
-   inherited Create(context, scriptPos, aBase);
-   FItemExpr:=aItem;
-   FFromIndexExpr:=aFromIndex;
-   Typ:=context.TypInteger;
-end;
-
-// Destroy
-//
-destructor TArrayIndexOfExpr.Destroy;
-begin
-   inherited;
-   FItemExpr.Free;
-   FFromIndexExpr.Free;
-end;
-
-// EvalAsVariant
-//
-procedure TArrayIndexOfExpr.EvalAsVariant(exec : TdwsExecution; var Result : Variant);
-begin
-   VarCopySafe(Result, EvalAsInteger(exec));
-end;
-
-// GetSubExpr
-//
-function TArrayIndexOfExpr.GetSubExpr(i : Integer) : TExprBase;
-begin
-   case i of
-      0 : Result:=FBaseExpr;
-      1 : Result:=FItemExpr;
-   else
-      Result:=FFromIndexExpr;
-   end;
-end;
-
-// GetSubExprCount
-//
-function TArrayIndexOfExpr.GetSubExprCount : Integer;
-begin
-   Result:=3
-end;
-
-// ------------------
-// ------------------ TDynamicArrayIndexOfExpr ------------------
-// ------------------
-
-// Create
-//
-constructor TDynamicArrayIndexOfExpr.Create(context : TdwsCompilerContext; const scriptPos : TScriptPos;
-                                            aBase : TTypedExpr; aItem : TTypedExpr; aFromIndex : TTypedExpr);
-var
-   arrayItemTyp : TTypeSymbol;
-begin
-   inherited Create(context, scriptPos, aBase, aItem, aFromIndex);
-   // resolve internal method depending on array and item type
-   if (FItemExpr<>nil) and (FItemExpr.Typ.AsFuncSymbol<>nil) then
-      FMethod:=DoEvalFuncPtr
-   else if (FBaseExpr<>nil) and (FBaseExpr.Typ<>nil) then begin
-      arrayItemTyp:=FBaseExpr.Typ.Typ;
-      if arrayItemTyp<>nil then begin
-         if arrayItemTyp.Size>1 then
-            FMethod:=DoEvalData
-         else if arrayItemTyp.IsOfType(context.TypString) then
-            FMethod:=DoEvalString
-         else if arrayItemTyp.IsOfType(context.TypInteger) then
-            FMethod:=DoEvalInteger
-         else FMethod:=DoEvalValue;
-      end;
-   end;
-end;
-
-// EvalAsInteger
-//
-function TDynamicArrayIndexOfExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
-var
-   base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
-begin
-   BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
-   Result:=FMethod(exec, dyn);
-end;
-
-// DoEvalValue
-//
-function TDynamicArrayIndexOfExpr.DoEvalValue(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-var
-   fromIndex : Integer;
-   v : Variant;
-begin
-   if FFromIndexExpr<>nil then
-      fromIndex:=FFromIndexExpr.EvalAsInteger(exec)
-   else fromIndex:=0;
-   FItemExpr.EvalAsVariant(exec, v);
-   Result:=dyn.IndexOfValue(v, fromIndex, dyn.ArrayLength-1);
-end;
-
-// DoEvalString
-//
-function TDynamicArrayIndexOfExpr.DoEvalString(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-var
-   fromIndex : Integer;
-   v : String;
-begin
-   if FFromIndexExpr<>nil then
-      fromIndex:=FFromIndexExpr.EvalAsInteger(exec)
-   else fromIndex:=0;
-   FItemExpr.EvalAsString(exec, v);
-   Result:=dyn.IndexOfString(v, fromIndex);
-end;
-
-// DoEvalInteger
-//
-function TDynamicArrayIndexOfExpr.DoEvalInteger(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-var
-   fromIndex : Integer;
-begin
-   if FFromIndexExpr<>nil then
-      fromIndex:=FFromIndexExpr.EvalAsInteger(exec)
-   else fromIndex:=0;
-   Result:=dyn.IndexOfInteger(FItemExpr.EvalAsInteger(exec), fromIndex);
-end;
-
-// DoEvalFuncPtr
-//
-function TDynamicArrayIndexOfExpr.DoEvalFuncPtr(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-var
-   fromIndex : Integer;
-   v : Variant;
-begin
-   if FFromIndexExpr<>nil then
-      fromIndex:=FFromIndexExpr.EvalAsInteger(exec)
-   else fromIndex:=0;
-   FItemExpr.EvalAsVariant(exec, v);
-   Result:=dyn.IndexOfFuncPtr(v, fromIndex)
-end;
-
-// DoEvalData
-//
-function TDynamicArrayIndexOfExpr.DoEvalData(exec : TdwsExecution; dyn : TScriptDynamicArray) : Integer;
-var
-   fromIndex : Integer;
-begin
-   if FFromIndexExpr<>nil then
-      fromIndex:=FFromIndexExpr.EvalAsInteger(exec)
-   else fromIndex:=0;
-   Result:=dyn.IndexOfData(TDataExpr(FItemExpr).DataPtr[exec], fromIndex, dyn.ArrayLength-1, FItemExpr.Typ.Size)
-end;
-
-// ------------------
-// ------------------ TStaticArrayIndexOfExpr ------------------
-// ------------------
-
-// EvalAsInteger
-//
-function TStaticArrayIndexOfExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
-var
-   fromIndex : Integer;
-   arrayDC : IDataContext;
-   dc : TDataContext;
-   value : Variant;
-   arrayTyp : TStaticArraySymbol;
-begin
-   arrayTyp := BaseExpr.Typ as TStaticArraySymbol;
-   if FFromIndexExpr<>nil then begin
-      fromIndex := FFromIndexExpr.EvalAsInteger(exec);
-      if fromIndex < arrayTyp.LowBound then
-         fromIndex := arrayTyp.LowBound;
-   end else fromIndex := arrayTyp.LowBound;
-
-   arrayDC := (BaseExpr as TDataExpr).DataPtr[exec];
-   dc := (arrayDC.GetSelf as TDataContext);
-
-   if FItemExpr.Typ.Size = 1 then begin
-      FItemExpr.EvalAsVariant(exec, value);
-      Result := dc.IndexOfValue(value, fromIndex - arrayTyp.LowBound, arrayTyp.ElementCount - 1);
-   end else begin
-      Result := TDataContext(arrayDC.GetSelf).IndexOfData(
-         TDataExpr(FItemExpr).DataPtr[exec],
-         fromIndex - arrayTyp.LowBound, arrayTyp.ElementCount - 1,
-         FItemExpr.Typ.Size
-      );
-   end;
-   if not ForceZeroBased then
-      if (Result >= 0) or (arrayTyp.LowBound < 0) then
-         Result := Result + arrayTyp.LowBound;
-end;
-
-// ------------------
-// ------------------ TArrayRemoveExpr ------------------
-// ------------------
-
-// EvalAsInteger
-//
-function TArrayRemoveExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
-var
-   index : Integer;
-   base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
-begin
-   BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
-   index:=FMethod(exec, dyn);
-   if index>=0 then
-      dyn.Delete(index, 1);
-   Result:=index;
 end;
 
 // ------------------
@@ -3459,13 +3180,11 @@ end;
 procedure TAssociativeArrayKeysExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    a : IScriptAssociativeArray;
-   dyn : TScriptDynamicArray;
 begin
    Expr.EvalAsScriptAssociativeArray(exec, a);
-   dyn := TScriptDynamicArray.CreateNew(Typ.Typ);
-   Result := dyn;
+   Result := TScriptDynamicArray.CreateNew(Typ.Typ);
    if a <> nil then
-      dyn.ReplaceData((a.GetSelf as TScriptAssociativeArray).CopyKeys);
+      Result.ReplaceData((a.GetSelf as TScriptAssociativeArray).CopyKeys);
 end;
 
 end.

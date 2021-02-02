@@ -28,7 +28,7 @@ uses
    dwsJSLibModule, dwsFunctions, dwsGlobalVarsFunctions, dwsErrors,
    dwsRTTIFunctions, dwsConstExprs, dwsInfo, dwsScriptSource, dwsSymbolDictionary,
    dwsUnicode, dwsExprList, dwsXXHash, dwsCodeGenWriters, dwsCompilerContext,
-   dwsArrayExprs;
+   dwsArrayExprs, dwsArrayIndexOfExprs;
 
 type
 
@@ -1160,6 +1160,8 @@ begin
    RegisterCodeGen(TNegFloatExpr,         TdwsExprGenericCodeGen.Create(['(', '-', 0, ')']));
    RegisterCodeGen(TNegVariantExpr,       TdwsExprGenericCodeGen.Create(['(', '-', 0, ')']));
 
+   RegisterCodeGen(TAwaitExpr,            TdwsExprGenericCodeGen.Create(['(await ', 0, ')']));
+
    RegisterCodeGen(TCoalesceExpr,         TJSCoalesceExpr.Create);
    RegisterCodeGen(TCoalesceStrExpr,      TJSCoalesceExpr.Create);
    RegisterCodeGen(TCoalesceIntExpr,      TJSCoalesceExpr.Create);
@@ -1352,9 +1354,12 @@ begin
    RegisterCodeGen(TArrayPeekExpr,                 TJSArrayPeekExpr.Create);
    RegisterCodeGen(TArrayPopExpr,                  TJSArrayPopExpr.Create);
    RegisterCodeGen(TArrayDeleteExpr,               TJSArrayDeleteExpr.Create);
-   RegisterCodeGen(TArrayIndexOfExpr,              TJSArrayIndexOfExpr.Create);
-   RegisterCodeGen(TDynamicArrayIndexOfExpr,       TJSArrayIndexOfExpr.Create);
-   RegisterCodeGen(TStaticArrayIndexOfExpr,        TJSArrayIndexOfExpr.Create);
+
+   RegisterCodeGen(TDynamicArrayIndexOfExpr,          TJSArrayIndexOfExpr.Create);
+   RegisterCodeGen(TDynamicArrayIndexOfDataExpr,      TJSArrayIndexOfExpr.Create);
+   RegisterCodeGen(TDynamicArrayIndexOfIntegerExpr,   TJSArrayIndexOfExpr.Create);
+   RegisterCodeGen(TStaticArrayIndexOfExpr,           TJSArrayIndexOfExpr.Create);
+
    RegisterCodeGen(TArrayRemoveExpr,               TJSArrayRemoveExpr.Create);
    RegisterCodeGen(TArrayInsertExpr,               TJSArrayInsertExpr.Create);
    RegisterCodeGen(TArrayMoveExpr,                 TJSArrayMoveExpr.Create);
@@ -1675,6 +1680,8 @@ end;
 //
 procedure TdwsJSCodeGen.DoCompileFuncSymbol(func : TFuncSymbol; deAnonymize : Boolean = False);
 begin
+   if func.IsAsync then
+      WriteString('async ');
    WriteString('function ');
    if deAnonymize or (func.Name<>'') then
       WriteSymbolName(func);
@@ -8899,7 +8906,7 @@ var
    i : Integer;
    info : IInfo;
    s : String;
-   dynArray : TScriptDynamicArray;
+   dynArray : IScriptDynArray;
    exec : TdwsExecution;
    v : Variant;
 begin
