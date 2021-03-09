@@ -380,7 +380,7 @@ type
          procedure SetCapacity(newCapacity : Integer);
          procedure DetachChild(child : TdwsJSONValue); override;
          procedure DeleteIndex(idx : Integer);
-         procedure SwapNoRangeCheck(index1, index2 : Integer);
+         procedure SwapNoRangeCheck(index1, index2 : NativeInt);
 
          function GetValueType : TdwsJSONValueType; override;
          function DoGetName(index : Integer) : UnicodeString; override;
@@ -2109,9 +2109,9 @@ type
    TCompareAdapter = class
       ValueArray : PdwsJSONValueArray;
       CompareMethod : TdwsJSONValueCompareMethod;
-      function Compare(index1, index2 : Integer) : Integer;
+      function Compare(index1, index2 : NativeInt) : Integer;
    end;
-   function TCompareAdapter.Compare(index1, index2 : Integer) : Integer;
+   function TCompareAdapter.Compare(index1, index2 : NativeInt) : Integer;
    begin
       Result:=CompareMethod(ValueArray[index1], ValueArray[Index2]);
    end;
@@ -2136,7 +2136,7 @@ end;
 
 // SwapNoRangeCheck
 //
-procedure TdwsJSONArray.SwapNoRangeCheck(index1, index2 : Integer);
+procedure TdwsJSONArray.SwapNoRangeCheck(index1, index2 : NativeInt);
 var
    temp : TdwsJSONValue;
 begin
@@ -2808,9 +2808,15 @@ end;
 // WriteNumber
 //
 procedure TdwsJSONWriter.WriteNumber(const n : Double);
+var
+   buffer : array [0..63] of WideChar;
+   nc : Integer;
+   nExt : Extended;
 begin
    BeforeWriteImmediate;
-   FStream.WriteString(UnicodeString(FloatToStr(n, vJSONFormatSettings)));
+   nExt := n;
+   nc := FloatToText(buffer, nExt, fvExtended, ffGeneral, 15, 0, vJSONFormatSettings);
+   FStream.Write(buffer, nc*SizeOf(WideChar));
    AfterWriteImmediate;
 end;
 

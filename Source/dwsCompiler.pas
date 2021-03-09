@@ -1829,18 +1829,18 @@ type
 
    TRankedUnits = class
       Ranked : TUnitMainSymbolArray;
-      function Compare(index1, index2 : Integer) : Integer;
-      procedure Swap(index1, index2 : Integer);
+      function Compare(index1, index2 : NativeInt) : Integer;
+      procedure Swap(index1, index2 : NativeInt);
    end;
 
-function TRankedUnits.Compare(index1, index2 : Integer) : Integer;
+function TRankedUnits.Compare(index1, index2 : NativeInt) : Integer;
 begin
    Result:=Ranked[index1].InitializationRank-Ranked[index2].InitializationRank;
 end;
 
 // Swap
 //
-procedure TRankedUnits.Swap(index1, index2 : Integer);
+procedure TRankedUnits.Swap(index1, index2 : NativeInt);
 var
    t : TUnitMainSymbol;
 begin
@@ -7968,9 +7968,12 @@ begin
                CheckDynamicOrStatic;
                indexOfClass := TArrayIndexOfExpr.ArrayIndexOfExprClass(arraySym);
                if CheckArguments(1, 2) then begin
-                  if (argList[0].Typ=nil) or not arraySym.Typ.IsCompatible(argList[0].Typ) then
-                     IncompatibleTypes(argPosArray[0], CPE_IncompatibleParameterTypes,
-                                       arraySym.Typ, argList[0].Typ);
+                  if (argList[0].Typ=nil) or not arraySym.Typ.IsCompatible(argList[0].Typ) then begin
+//                     IncompatibleTypes(argPosArray[0], CPE_IncompatibleParameterTypes,
+//                                       arraySym.Typ, argList[0].Typ);
+                     argList[0] := CompilerUtils.WrapWithImplicitConversion(FCompilerContext, argList[0], arraySym.Typ,
+                                                                            argPosArray[0], CPE_IncompatibleParameterTypes);
+                  end;
                   if argList.Count>1 then begin
                      if (argList[1].Typ=nil) or not argList[1].Typ.IsOfType(FCompilerContext.TypInteger) then
                         FMsgs.AddCompilerError(argPosArray[0], CPE_IntegerExpressionExpected);
@@ -8085,6 +8088,8 @@ begin
                         Result:=TArraySortNaturalIntegerExpr.Create(FCompilerContext, namePos, baseExpr)
                      else if arraySym.Typ.IsOfType(FCompilerContext.TypFloat) then
                         Result:=TArraySortNaturalFloatExpr.Create(FCompilerContext, namePos, baseExpr)
+                     else if arraySym.Typ.IsOfType(FCompilerContext.TypBoolean) then
+                        Result:=TArraySortNaturalExpr.Create(FCompilerContext, namePos, baseExpr)
                      else begin
                         FMsgs.AddCompilerError(namePos, CPE_ArrayDoesNotHaveNaturalSortOrder);
                         Result:=TArraySortNaturalExpr.Create(FCompilerContext, namePos, baseExpr);

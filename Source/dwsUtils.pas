@@ -31,6 +31,8 @@ type
 
    TStringDynArray = array of String;
    TInt64DynArray = array of Int64;
+   TDoubleDynArray = array of Double;
+   TInterfaceDynArray = array of IUnknown;
 
    TInt64Array = array [0..High(MaxInt) shr 4] of Int64;
    PInt64Array = ^TInt64Array;
@@ -865,10 +867,10 @@ type
 
    TQuickSort = record
       public
-         CompareMethod : function (index1, index2 : Integer) : Integer of object;
-         SwapMethod : procedure (index1, index2 : Integer) of object;
+         CompareMethod : function (index1, index2 : NativeInt) : Integer of object;
+         SwapMethod : procedure (index1, index2 : NativeInt) of object;
 
-         procedure Sort(minIndex, maxIndex : Integer);
+         procedure Sort(minIndex, maxIndex : NativeInt);
    end;
 
    TStringIterator = class
@@ -6451,9 +6453,9 @@ end;
 
 // Sort
 //
-procedure TQuickSort.Sort(minIndex, maxIndex : Integer);
+procedure TQuickSort.Sort(minIndex, maxIndex : NativeInt);
 var
-   i, j, p, n : Integer;
+   i, j, p, n : NativeInt;
 begin
    n:=maxIndex-minIndex;
    case n of

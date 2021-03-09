@@ -1591,7 +1591,7 @@ var
    tokenizer : TdwsJSONParserState;
    values : TSimpleInt64List;
    i : Integer;
-   newArray : TScriptDynamicIntegerArray;
+   newArray : IScriptDynArray;
    s : String;
 begin
    args.EvalAsString(0, s);
@@ -1600,8 +1600,8 @@ begin
    try
       tokenizer.ParseIntegerArray(values);
 
-      newArray := TScriptDynamicIntegerArray.Create((args.Exec as TdwsProgramExecution).CompilerContext.TypInteger);
-      VarCopySafe(result, IScriptDynArray(newArray));
+      newArray := CreateNewDynamicArray((args.Exec as TdwsProgramExecution).CompilerContext.TypInteger);
+      VarCopySafe(result, newArray);
       newArray.ArrayLength := values.Count;
 
       for i := 0 to newArray.ArrayLength-1 do
@@ -1623,7 +1623,7 @@ var
    tokenizer : TdwsJSONParserState;
    values : TSimpleDoubleList;
    i : Integer;
-   newArray : TScriptDynamicFloatArray;
+   newArray : IScriptDynArray;
    s : String;
 begin
    args.EvalAsString(0, s);
@@ -1632,9 +1632,9 @@ begin
    try
       tokenizer.ParseNumberArray(values);
 
-      newArray:=TScriptDynamicFloatArray.Create((args.Exec as TdwsProgramExecution).CompilerContext.TypFloat);
-      VarCopySafe(result, IScriptDynArray(newArray));
-      newArray.ArrayLength:=values.Count;
+      newArray := CreateNewDynamicArray((args.Exec as TdwsProgramExecution).CompilerContext.TypFloat);
+      VarCopySafe(result, newArray);
+      newArray.ArrayLength := values.Count;
 
       for i:=0 to newArray.ArrayLength-1 do
          newArray.AsFloat[i] := values[i];
@@ -1655,21 +1655,21 @@ var
    tokenizer : TdwsJSONParserState;
    values : TUnicodeStringList;
    i : Integer;
-   newArray : TScriptDynamicStringArray;
+   newArray : IScriptDynArray;
    s : String;
 begin
    args.EvalAsString(0, s);
 
-   tokenizer:=TdwsJSONParserState.Create(s);
+   tokenizer := TdwsJSONParserState.Create(s);
    values := TUnicodeStringList.Create;
    try
       tokenizer.ParseStringArray(values);
 
-      newArray:=TScriptDynamicStringArray.Create((args.Exec as TdwsProgramExecution).CompilerContext.TypString);
-      VarCopySafe(result, IScriptDynArray(newArray));
-      newArray.ArrayLength:=values.Count;
+      newArray := CreateNewDynamicArray((args.Exec as TdwsProgramExecution).CompilerContext.TypString);
+      VarCopySafe(result, newArray);
+      newArray.ArrayLength := values.Count;
 
-      for i:=0 to newArray.ArrayLength-1 do
+      for i:=0 to values.Count-1 do
          newArray.AsString[i] := values[i];
    finally
       values.Free;

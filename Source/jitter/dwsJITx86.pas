@@ -274,13 +274,13 @@ type
       procedure CompileAssignInteger(expr : TTypedExpr; source : Integer); override;
       procedure DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup); override;
    end;
-   Tx86VarParam = class (TdwsJITter_x86)
-      class procedure CompileAsPVariant(x86 : Tx86_32_WriteOnlyStream; expr : TByRefParamExpr);
-      function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
-      function CompileInteger(expr : TTypedExpr) : Integer; override;
-      procedure DoCompileAssignFloat(expr : TTypedExpr; source : TxmmRegister); override;
-      procedure CompileAssignInteger(expr : TTypedExpr; source : Integer); override;
-   end;
+//   Tx86VarParam = class (TdwsJITter_x86)
+//      class procedure CompileAsPVariant(x86 : Tx86_32_WriteOnlyStream; expr : TByRefParamExpr);
+//      function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
+//      function CompileInteger(expr : TTypedExpr) : Integer; override;
+//      procedure DoCompileAssignFloat(expr : TTypedExpr; source : TxmmRegister); override;
+//      procedure CompileAssignInteger(expr : TTypedExpr; source : Integer); override;
+//   end;
 
    Tx86FieldVar = class (Tx86InterpretedExpr)
       procedure CompileToData(expr : TFieldVarExpr; dest : TgpRegister);
@@ -298,6 +298,7 @@ type
       procedure DoCompileAssignFloat(expr : TTypedExpr; source : TxmmRegister); override;
       procedure CompileAssignInteger(expr : TTypedExpr; source : Integer); override;
    end;
+   (*
    Tx86DynamicArrayBase = class (Tx86ArrayBase)
       procedure CompileAsData(expr : TTypedExpr);
    end;
@@ -311,6 +312,7 @@ type
    Tx86DynamicArraySet = class (Tx86DynamicArrayBase)
       procedure CompileStatement(expr : TExprBase); override;
    end;
+   *)
 
    Tx86AssignConstToFloatVar = class (Tx86InterpretedExpr)
       procedure CompileStatement(expr : TExprBase); override;
@@ -748,17 +750,17 @@ begin
    RegisterJITter(TFieldExpr,                   FInterpretedJITter.IncRefCount);
    RegisterJITter(TFieldVarExpr,                Tx86FieldVar.Create(Self));
 
-   RegisterJITter(TVarParamExpr,                Tx86VarParam.Create(Self));
+   RegisterJITter(TVarParamExpr,                FInterpretedJITter.IncRefCount); // Tx86VarParam.Create(Self));
    RegisterJITter(TConstParamExpr,              FInterpretedJITter.IncRefCount);
    RegisterJITter(TLazyParamExpr,               FInterpretedJITter.IncRefCount);
    RegisterJITter(TVarParentExpr,               FInterpretedJITter.IncRefCount);
    RegisterJITter(TVarParamParentExpr,          FInterpretedJITter.IncRefCount);
 
    RegisterJITter(TStaticArrayExpr,             Tx86StaticArray.Create(Self));
-   RegisterJITter(TDynamicArrayExpr,            Tx86DynamicArray.Create(Self));
-   RegisterJITter(TDynamicArrayVarExpr,         Tx86DynamicArray.Create(Self));
-   RegisterJITter(TDynamicArraySetExpr,         Tx86DynamicArraySet.Create(Self));
-   RegisterJITter(TDynamicArraySetVarExpr,      Tx86DynamicArraySet.Create(Self));
+   RegisterJITter(TDynamicArrayExpr,            FInterpretedJITter.IncRefCount); //Tx86DynamicArray.Create(Self));
+   RegisterJITter(TDynamicArrayVarExpr,         FInterpretedJITter.IncRefCount); //Tx86DynamicArray.Create(Self));
+   RegisterJITter(TDynamicArraySetExpr,         FInterpretedJITter.IncRefCount); //Tx86DynamicArraySet.Create(Self));
+   RegisterJITter(TDynamicArraySetVarExpr,      FInterpretedJITter.IncRefCount); //Tx86DynamicArraySet.Create(Self));
    RegisterJITter(TDynamicArraySetDataExpr,     FInterpretedJITter.IncRefCount);
 
    RegisterJITter(TArrayLengthExpr,             FInterpretedJITter.IncRefCount);
@@ -766,10 +768,12 @@ begin
    RegisterJITter(TArrayAddExpr,                FInterpretedJITter.IncRefCount);
    RegisterJITter(TArrayInsertExpr,             FInterpretedJITter.IncRefCount);
 
-   RegisterJITter(TArrayIndexOfExpr,               FInterpretedJITter.IncRefCount);
-   RegisterJITter(TDynamicArrayIndexOfExpr,        FInterpretedJITter.IncRefCount);
    RegisterJITter(TDynamicArrayIndexOfDataExpr,    FInterpretedJITter.IncRefCount);
+   RegisterJITter(TDynamicArrayIndexOfFuncPtrExpr, FInterpretedJITter.IncRefCount);
+   RegisterJITter(TDynamicArrayIndexOfVariantExpr, FInterpretedJITter.IncRefCount);
    RegisterJITter(TDynamicArrayIndexOfIntegerExpr, FInterpretedJITter.IncRefCount);
+   RegisterJITter(TDynamicArrayIndexOfStringExpr,  FInterpretedJITter.IncRefCount);
+   RegisterJITter(TDynamicArrayIndexOfFloatExpr,   FInterpretedJITter.IncRefCount);
 
    RegisterJITter(TArrayRemoveExpr,             FInterpretedJITter.IncRefCount);
    RegisterJITter(TArrayDeleteExpr,             FInterpretedJITter.IncRefCount);
@@ -2003,14 +2007,14 @@ procedure Tx86OpAssignFloat.CompileStatement(expr : TExprBase);
 var
    e : TOpAssignExpr;
    reg, regRight : TxmmRegister;
-   jitLeft : TdwsJITter;
-   delta : Integer;
+//   jitLeft : TdwsJITter;
+//   delta : Integer;
 begin
    e:=TOpAssignExpr(expr);
 
    regRight:=jit.CompileFloat(e.Right);
 
-   if e.Left is TDynamicArrayExpr then begin
+(*   if e.Left is TDynamicArrayExpr then begin
 
       jitLeft:=jit.FindJITter(e.Left.ClassType);
 
@@ -2021,7 +2025,7 @@ begin
       x86._xmm_reg_reg(OP, reg, regRight);
       x86._movsd_qword_ptr_indexed_reg(gprEAX, gprECX, 1, delta, reg);
 
-   end else begin
+   end else*) begin
 
       reg:=jit.CompileFloat(e.Left);
 
@@ -3053,7 +3057,7 @@ end;
 // ------------------
 // ------------------ Tx86VarParam ------------------
 // ------------------
-
+(*
 // CompileAsPVariant
 //
 class procedure Tx86VarParam.CompileAsPVariant(x86 : Tx86_32_WriteOnlyStream; expr : TByRefParamExpr);
@@ -3138,7 +3142,7 @@ begin
 
    end else inherited;
 end;
-
+*)
 // ------------------
 // ------------------ Tx86FieldVar ------------------
 // ------------------
@@ -3268,7 +3272,7 @@ begin
 
    if jit.IsFloat(e) then begin
 
-      if (e.BaseExpr is TByRefParamExpr) and (e.IndexExpr is TConstIntExpr) then begin
+      (*if (e.BaseExpr is TByRefParamExpr) and (e.IndexExpr is TConstIntExpr) then begin
 
          index:=TConstIntExpr(e.IndexExpr).Value-e.LowBound;
 
@@ -3277,7 +3281,7 @@ begin
          Result:=jit.AllocXMMReg(e);
          x86._movsd_reg_qword_ptr_indexed(Result, gprEAX, gprECX, 1, cVariant_DataOffset);
 
-      end else if e.BaseExpr.ClassType=TVarExpr then begin
+      end else*) if e.BaseExpr.ClassType=TVarExpr then begin
 
          if e.IndexExpr is TConstIntExpr then begin
 
@@ -3368,7 +3372,7 @@ begin
 
    if jit.IsFloat(e) then begin
 
-      if (e.BaseExpr.ClassType=TVarParamExpr) and (e.IndexExpr is TConstIntExpr) then begin
+      (*if (e.BaseExpr.ClassType=TVarParamExpr) and (e.IndexExpr is TConstIntExpr) then begin
 
          index:=TConstIntExpr(e.IndexExpr).Value;
 
@@ -3376,7 +3380,7 @@ begin
          x86._mov_reg_dword(gprECX, index*SizeOf(Variant));
          x86._movsd_qword_ptr_indexed_reg(gprEAX, gprECX, 1, cVariant_DataOffset, source);
 
-      end else if (e.BaseExpr.ClassType=TVarExpr) and (e.IndexExpr is TConstIntExpr) then begin
+      end else *)if (e.BaseExpr.ClassType=TVarExpr) and (e.IndexExpr is TConstIntExpr) then begin
 
          index:=TConstIntExpr(e.IndexExpr).Value;
 
@@ -3432,7 +3436,7 @@ end;
 // ------------------
 // ------------------ Tx86DynamicArrayBase ------------------
 // ------------------
-
+(*
 // CompileAsData
 //
 procedure Tx86DynamicArrayBase.CompileAsData(expr : TTypedExpr);
@@ -3543,7 +3547,7 @@ begin
 
    end;
 end;
-
+*)
 // ------------------
 // ------------------ Tx86NegInt ------------------
 // ------------------

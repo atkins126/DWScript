@@ -192,6 +192,8 @@ type
       Info: TProgramInfo; ExtObject: TObject);
     procedure dwsWebClassesWebRequestMethodsContentFieldsEval(
       Info: TProgramInfo; ExtObject: TObject);
+    function dwsWebFunctionsPingIPv4FastEval(
+      const args: TExprBaseListExec): Variant;
   private
     { Private declarations }
     FServer :  IWebServerInfo;
@@ -204,14 +206,14 @@ implementation
 
 {$R *.dfm}
 
-uses dwsWinHTTP, dwsDynamicArrays;
+uses dwsWinHTTP, dwsDynamicArrays, dwsICMP;
 
 // WebServerSentEventToRawData
 //
 function WebServerSentEventToRawData(const obj : TScriptObjInstance) : RawByteString;
 var
    i : Integer;
-   dyn : TScriptDynamicStringArray;
+   dyn : IScriptDynArray;
    buf : String;
 begin
    buf := obj.AsString[obj.FieldAddress('ID')];
@@ -223,9 +225,11 @@ begin
    i := obj.AsInteger[obj.FieldAddress('Retry')];
    if i > 0 then
       Result := Result + 'retry: ' + ScriptStringToRawByteString(IntToStr(i)) + #10;
-   dyn := (obj.AsInterface[obj.FieldAddress('Data')] as IScriptDynArray).GetSelf as TScriptDynamicStringArray;
-   for i := 0 to dyn.ArrayLength-1 do
-      Result := Result + 'data: ' + StringToUTF8(dyn.AsString[i]) + #10;
+   dyn := (obj.AsInterface[obj.FieldAddress('Data')] as IScriptDynArray);
+   for i := 0 to dyn.ArrayLength-1 do begin
+      dyn.EvalAsString(i, buf);
+      Result := Result + 'data: ' + StringToUTF8(buf) + #10;
+   end;
    Result := Result + #10;
 end;
 
@@ -1171,6 +1175,12 @@ begin
    if host = 'localhost' then
       info.ResultAsString := '127.0.0.1'
    else info.ResultAsDataString := ResolveName(host);
+end;
+
+function TdwsWebLib.dwsWebFunctionsPingIPv4FastEval(
+  const args: TExprBaseListExec): Variant;
+begin
+   Result := PingIPv4(args.AsString[0], args.AsInteger[1]);
 end;
 
 procedure TdwsWebLib.dwsWebClassesHttpRequestCleanUp(ExternalObject: TObject);

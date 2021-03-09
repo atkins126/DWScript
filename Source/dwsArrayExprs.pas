@@ -137,16 +137,15 @@ type
 
    // Array expressions: x[index0] for dynamic arrays
    TDynamicArrayExpr = class(TArrayExpr)
-      protected
-         function EvalItem(exec : TdwsExecution; var dyn : IScriptDynArray) : PVariant;
-
       public
          procedure GetDataPtr(exec : TdwsExecution; var result : IDataContext); override;
 
          function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
+         function  EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
          function  EvalAsFloat(exec : TdwsExecution) : Double; override;
          procedure EvalAsVariant(exec : TdwsExecution; var result : Variant); override;
          procedure EvalAsString(exec : TdwsExecution; var result : String); override;
+         procedure EvalAsInterface(exec : TdwsExecution; var result : IUnknown); override;
 
          function  SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr; override;
 
@@ -155,11 +154,9 @@ type
 
    // Array expressions: x[index0] for dynamic arrays where BaseExpr is a TObjectVarExpr
    TDynamicArrayVarExpr = class sealed (TDynamicArrayExpr)
-      protected
-         function EvalItem(exec : TdwsExecution) : PVariant;
-
       public
          function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
+         function  EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
          function  EvalAsFloat(exec : TdwsExecution) : Double; override;
          procedure EvalAsString(exec : TdwsExecution; var result : String); override;
 
@@ -411,23 +408,19 @@ type
    // Sort a dynamic array (natural order)
    TArraySortNaturalExpr = class(TArrayTypedFluentExpr)
       public
-         procedure SetCompareMethod(var qs : TQuickSort; dyn : TScriptDynamicValueArray); virtual;
          procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
    end;
 
    TArraySortNaturalStringExpr = class(TArraySortNaturalExpr)
       public
-         procedure SetCompareMethod(var qs : TQuickSort; {%H-}dyn : TScriptDynamicValueArray); override;
    end;
 
    TArraySortNaturalIntegerExpr = class(TArraySortNaturalExpr)
       public
-         procedure SetCompareMethod(var qs : TQuickSort; {%H-}dyn : TScriptDynamicValueArray); override;
    end;
 
    TArraySortNaturalFloatExpr = class(TArraySortNaturalExpr)
       public
-         procedure SetCompareMethod(var qs : TQuickSort; {%H-}dyn : TScriptDynamicValueArray); override;
    end;
 
    // Returns the storage to use for the next call, normal sequence is
@@ -528,8 +521,6 @@ type
          function GetSubExpr(i : Integer) : TExprBase; override;
          function GetSubExprCount : Integer; override;
 
-         function GetBaseDynArray(exec : TdwsExecution) : TScriptDynamicArray;
-
       public
          constructor Create(context : TdwsCompilerContext; const scriptPos: TScriptPos;
                             aBase :  TTypedExpr);
@@ -542,6 +533,9 @@ type
 
    // Peek the last value of a dynamic array
    TArrayPeekExpr = class (TArrayDataExpr)
+      protected
+         procedure InternalEvalPeek(exec : TdwsExecution; var base : IScriptDynArray);
+
       public
          procedure EvalNoResult(exec : TdwsExecution); override;
          function  SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr; override;
@@ -924,7 +918,7 @@ procedure TNewArrayExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : 
       n:=LengthExpr[d].EvalAsInteger(exec);
       if n<0 then
          RaiseScriptError(exec, EScriptOutOfBounds.CreatePosFmt(ScriptPos, RTE_ArrayLengthIncorrectForDimension, [n, d]));
-      Result := TScriptDynamicArray.CreateNew(TDynamicArraySymbol(FTyps.List[FTyps.Count-1-d]).Typ);
+      Result := CreateNewDynamicArray(TDynamicArraySymbol(FTyps.List[FTyps.Count-1-d]).Typ);
       Result.ArrayLength:=n;
       Inc(d);
       if d<LengthExprCount then begin
@@ -936,7 +930,7 @@ procedure TNewArrayExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : 
 begin
    if LengthExprCount>0 then
       result:=CreateDimension(0)
-   else result:=TScriptDynamicArray.CreateNew(Typ.Typ);
+   else result := CreateNewDynamicArray(Typ.Typ);
 end;
 
 // AddLengthExpr
@@ -1102,9 +1096,11 @@ end;
 procedure TStaticArrayExpr.AssignExpr(exec : TdwsExecution; expr : TTypedExpr);
 var
    arrayData : IDataContext;
+   buf : Variant;
 begin
    FBaseExpr.GetDataPtr(exec, arrayData);
-   expr.EvalAsVariant(exec, arrayData.AsPVariant(GetIndex(exec))^);
+   expr.EvalAsVariant(exec, buf);
+   arrayData.AsVariant[GetIndex(exec)] := buf;
 end;
 
 // AssignValueAsInteger
@@ -1250,33 +1246,36 @@ begin
    CreateArrayElementDataContext(exec, Result);
 end;
 
-// EvalItem
-//
-function TDynamicArrayExpr.EvalItem(exec : TdwsExecution; var dyn : IScriptDynArray) : PVariant;
-var
-   dynArray : TScriptDynamicArray;
-   index : Integer;
-begin
-   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
-   dynArray:=TScriptDynamicArray(dyn.GetSelf);
-
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dynArray.ArrayLength, index);
-
-   Result:=dynArray.AsPVariant(index*FElementSize);
-end;
-
 // EvalAsInteger
 //
 function TDynamicArrayExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
 var
    dyn : IScriptDynArray;
-   p : PVarData;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec, dyn));
-   if p.VType=varInt64 then
-      Result:=p.VInt64
-   else VariantToInt64(PVariant(p)^, Result);
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := dyn.AsInteger[index];
+end;
+
+// EvalAsBoolean
+//
+function TDynamicArrayExpr.EvalAsBoolean(exec : TdwsExecution) : Boolean;
+var
+   dyn : IScriptDynArray;
+   index : Integer;
+begin
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := dyn.AsBoolean[index];
 end;
 
 // EvalAsFloat
@@ -1284,12 +1283,15 @@ end;
 function TDynamicArrayExpr.EvalAsFloat(exec : TdwsExecution) : Double;
 var
    dyn : IScriptDynArray;
-   p : PVarData;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec, dyn));
-   if p.VType=varDouble then
-      Result:=p.VDouble
-   else Result:=VariantToFloat(PVariant(p)^);
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := dyn.AsFloat[index];
 end;
 
 // EvalAsVariant
@@ -1297,8 +1299,15 @@ end;
 procedure TDynamicArrayExpr.EvalAsVariant(exec : TdwsExecution; var result : Variant);
 var
    dyn : IScriptDynArray;
+   index : Integer;
 begin
-   VarCopySafe(result, EvalItem(exec, dyn)^);
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   dyn.EvalAsVariant(index, result);
 end;
 
 // EvalAsString
@@ -1306,17 +1315,31 @@ end;
 procedure TDynamicArrayExpr.EvalAsString(exec : TdwsExecution; var result : String);
 var
    dyn : IScriptDynArray;
-   p : PVarData;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec, dyn));
-   {$ifdef FPC}
-   if p.VType=varString then
-      Result:=String(p.VString)
-   {$else}
-   if p.VType=varUString then
-      Result:=String(p.VUString)
-   {$endif}
-   else VariantToString(PVariant(p)^, Result);
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   dyn.EvalAsString(index, result);
+end;
+
+// EvalAsInterface
+//
+procedure TDynamicArrayExpr.EvalAsInterface(exec : TdwsExecution; var result : IUnknown);
+var
+   dyn : IScriptDynArray;
+   index : Integer;
+begin
+   FBaseExpr.EvalAsScriptDynArray(exec, dyn);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   dyn.EvalAsInterface(index, result);
 end;
 
 // SpecializeDataExpr
@@ -1341,7 +1364,8 @@ begin
    FBaseExpr.EvalAsScriptDynArray(exec, dyn);
 
    index := IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dyn.ArrayLength, index);
+   if not dyn.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
 
    result := TArrayElementDataContext.Create(dyn, index);
 end;
@@ -1350,62 +1374,68 @@ end;
 // ------------------ TDynamicArrayVarExpr ------------------
 // ------------------
 
-// EvalItem
-//
-function TDynamicArrayVarExpr.EvalItem(exec : TdwsExecution) : PVariant;
-var
-   pIDyn : PIUnknown;
-   dynArray : TScriptDynamicArray;
-   index : Integer;
-begin
-   pIDyn := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(FBaseExpr).StackAddr);
-   dynArray := TScriptDynamicArray(IScriptDynArray(pIDyn^).GetSelf);
-
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dynArray.ArrayLength, index);
-
-   Result:=dynArray.AsPVariant(index*FElementSize);
-end;
-
 // EvalAsInteger
 //
 function TDynamicArrayVarExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
 var
-   p : PVarData;
+   pIDyn : PIUnknown;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec));
-   if p.VType=varInt64 then
-      Result:=p.VInt64
-   else VariantToInt64(PVariant(p)^, Result);
+   pIDyn := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(FBaseExpr).StackAddr);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not IScriptDynArray(pIDyn^).BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := IScriptDynArray(pIDyn^).AsInteger[index*FElementSize];
+end;
+
+// EvalAsBoolean
+//
+function TDynamicArrayVarExpr.EvalAsBoolean(exec : TdwsExecution) : Boolean;
+var
+   pIDyn : PIUnknown;
+   index : Integer;
+begin
+   pIDyn := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(FBaseExpr).StackAddr);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not IScriptDynArray(pIDyn^).BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := IScriptDynArray(pIDyn^).AsBoolean[index*FElementSize];
 end;
 
 // EvalAsFloat
 //
 function TDynamicArrayVarExpr.EvalAsFloat(exec : TdwsExecution) : Double;
 var
-   p : PVarData;
+   pIDyn : PIUnknown;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec));
-   if p.VType=varDouble then
-      Result:=p.VDouble
-   else Result:=VariantToFloat(PVariant(p)^);
+   pIDyn := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(FBaseExpr).StackAddr);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not IScriptDynArray(pIDyn^).BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   Result := IScriptDynArray(pIDyn^).AsFloat[index*FElementSize];
 end;
 
 // EvalAsString
 //
 procedure TDynamicArrayVarExpr.EvalAsString(exec : TdwsExecution; var result : String);
 var
-   p : PVarData;
+   pIDyn : PIUnknown;
+   index : Integer;
 begin
-   p:=PVarData(EvalItem(exec));
-   {$ifdef FPC}
-   if p.VType=varString then
-      Result:=String(p.VString)
-   {$else}
-   if p.VType=varUString then
-      Result:=String(p.VUString)
-   {$endif}
-   else VariantToString(PVariant(p)^, Result);
+   pIDyn := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(FBaseExpr).StackAddr);
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not IScriptDynArray(pIDyn^).BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+
+   IScriptDynArray(pIDyn^).EvalAsString(index*FElementSize, result);
 end;
 
 // SpecializeDataExpr
@@ -1448,15 +1478,13 @@ end;
 //
 procedure TDynamicArraySetExpr.EvalNoResult(exec : TdwsExecution);
 var
-   dynArray : TScriptDynamicArray;
+   dyn : IScriptDynArray;
    index : Integer;
-   base : IScriptDynArray;
 begin
-   FArrayExpr.EvalAsScriptDynArray(exec, base);
-   dynArray:=TScriptDynamicArray(base.GetSelf);
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dynArray.ArrayLength, index);
-   ValueExpr.EvalAsVariant(exec, dynArray.AsPVariant(index)^);
+   ArrayExpr.EvalAsScriptDynArray(exec, dyn);
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dyn.SetFromExpr(index, exec, ValueExpr) then
+      BoundsCheckFailed(exec, index);
 end;
 
 // SpecializeProgramExpr
@@ -1499,15 +1527,13 @@ end;
 //
 procedure TDynamicArraySetVarExpr.EvalNoResult(exec : TdwsExecution);
 var
-   dyn : IScriptDynArray;
+   p : PIUnknown;
    index : Integer;
-   v : Variant;
 begin
-   ArrayExpr.EvalAsScriptDynArray(exec, dyn);
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dyn.ArrayLength, index);
-   ValueExpr.EvalAsVariant(exec, v);
-   dyn.SetAsVariant(index, v);
+   p := exec.Stack.PointerToInterfaceValue_BaseRelative(TObjectVarExpr(ArrayExpr).StackAddr);
+   index := IndexExpr.EvalAsInteger(exec);
+   if not IScriptDynArray(p^).SetFromExpr(index, exec, ValueExpr) then
+      BoundsCheckFailed(exec, index);
 end;
 
 // ------------------
@@ -1518,18 +1544,19 @@ end;
 //
 procedure TDynamicArraySetDataExpr.EvalNoResult(exec : TdwsExecution);
 var
-   dynArray : TScriptDynamicArray;
+   dynDataArray : TScriptDynamicDataArray;
    index : Integer;
    base : IScriptDynArray;
    dataExpr : TDataExpr;
 begin
    FArrayExpr.EvalAsScriptDynArray(exec, base);
-   dynArray:=TScriptDynamicArray(base.GetSelf);
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dynArray.ArrayLength, index);
+   dynDataArray := (base.GetSelf as TScriptDynamicDataArray);
+   index := IndexExpr.EvalAsInteger(exec);
+   if not dynDataArray.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
 
    dataExpr := (ValueExpr as TDataExpr);
-   dynArray.WriteData(index*dynArray.ElementSize, dataExpr.DataPtr[exec], dynArray.ElementSize);
+   dynDataArray.WriteData(index*dynDataArray.ElementSize, dataExpr.DataPtr[exec], dynDataArray.ElementSize);
 end;
 
 // ------------------
@@ -1901,16 +1928,16 @@ end;
 //
 procedure TArraySwapExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
-   dyn : TScriptDynamicArray;
    i1, i2 : Integer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, result);
-   dyn:=TScriptDynamicArray(result.GetSelf);
-   i1:=Index1Expr.EvalAsInteger(exec);
-   i2:=Index2Expr.EvalAsInteger(exec);
-   BoundsCheck(exec, dyn.ArrayLength, i1);
-   BoundsCheck(exec, dyn.ArrayLength, i2);
-   dyn.Swap(i1, i2);
+   i1 := Index1Expr.EvalAsInteger(exec);
+   i2 := Index2Expr.EvalAsInteger(exec);
+   if not result.BoundsCheckPassed(i1) then
+      BoundsCheckFailed(exec, i1);
+   if not result.BoundsCheckPassed(i2) then
+      BoundsCheckFailed(exec, i2);
+   result.Swap(i1, i2);
 end;
 
 // GetSubExpr
@@ -1939,46 +1966,55 @@ end;
 type
    TArraySortComparer = class
       FExec : TdwsExecution;
-      FDyn : TScriptDynamicArray;
+      FDyn : IScriptDynArray;
       FFunc : TFuncPtrExpr;
       FFuncPointer : IFuncPointer;
       FLeftAddr, FRightAddr : Integer;
-      FData : TData;
-      constructor Create(exec : TdwsExecution; dyn : TScriptDynamicArray; compareFunc : TFuncPtrExpr);
-      function CompareData(index1, index2 : Integer) : Integer;
-      function CompareValue(index1, index2 : Integer) : Integer;
+      constructor Create(exec : TdwsExecution; const dyn : IScriptDynArray; compareFunc : TFuncPtrExpr);
+      function CompareData(index1, index2 : NativeInt) : Integer;
+      function CompareValue(index1, index2 : NativeInt) : Integer;
+      procedure Swap(index1, index2 : NativeInt);
    end;
 
 // Create
 //
-constructor TArraySortComparer.Create(exec : TdwsExecution; dyn : TScriptDynamicArray;
+constructor TArraySortComparer.Create(exec : TdwsExecution; const dyn : IScriptDynArray;
                                       compareFunc : TFuncPtrExpr);
 begin
-   FExec:=exec;
-   FDyn:=dyn;
-   FData:=dyn.AsPData^;
-   FLeftAddr:=exec.Stack.BasePointer+(compareFunc.Args[0] as TVarExpr).StackAddr;
-   FRightAddr:=exec.Stack.BasePointer+(compareFunc.Args[1] as TVarExpr).StackAddr;
-   FFunc:=compareFunc;
+   FExec := exec;
+   FDyn := dyn;
+   FLeftAddr := exec.Stack.BasePointer+(compareFunc.Args[0] as TVarExpr).StackAddr;
+   FRightAddr := exec.Stack.BasePointer+(compareFunc.Args[1] as TVarExpr).StackAddr;
+   FFunc := compareFunc;
    compareFunc.EvalAsFuncPointer(exec, FFuncPointer);
 end;
 
 // CompareData
 //
-function TArraySortComparer.CompareData(index1, index2 : Integer) : Integer;
+function TArraySortComparer.CompareData(index1, index2 : NativeInt) : Integer;
+var
+   dyn : TScriptDynamicDataArray;
 begin
-   DWSCopyData(FData, index1*FDyn.ElementSize, FExec.Stack.Data, FLeftAddr, FDyn.ElementSize);
-   DWSCopyData(FData, index2*FDyn.ElementSize, FExec.Stack.Data, FRightAddr, FDyn.ElementSize);
-   Result:=FFuncPointer.EvalAsInteger(FExec, FFunc);
+   dyn := (FDyn.GetSelf as TScriptDynamicDataArray);
+   DWSCopyData(dyn.AsPData^, index1*dyn.ElementSize, FExec.Stack.Data, FLeftAddr, dyn.ElementSize);
+   DWSCopyData(dyn.AsPData^, index2*dyn.ElementSize, FExec.Stack.Data, FRightAddr, dyn.ElementSize);
+   Result := FFuncPointer.EvalAsInteger(FExec, FFunc);
 end;
 
 // CompareValue
 //
-function TArraySortComparer.CompareValue(index1, index2 : Integer) : Integer;
+function TArraySortComparer.CompareValue(index1, index2 : NativeInt) : Integer;
 begin
-   VarCopySafe(FExec.Stack.Data[FLeftAddr], FData[index1]);
-   VarCopySafe(FExec.Stack.Data[FRightAddr], FData[index2]);
-   Result:=FFuncPointer.EvalAsInteger(FExec, FFunc);
+   FDyn.EvalAsVariant(index1, FExec.Stack.Data[FLeftAddr]);
+   FDyn.EvalAsVariant(index2, FExec.Stack.Data[FRightAddr]);
+   Result := FFuncPointer.EvalAsInteger(FExec, FFunc);
+end;
+
+// Swap
+//
+procedure TArraySortComparer.Swap(index1, index2 : NativeInt);
+begin
+   FDyn.Swap(index1, index2);
 end;
 
 // ------------------
@@ -2017,19 +2053,17 @@ end;
 //
 procedure TArraySortExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
-   dyn : TScriptDynamicValueArray;
    qs : TQuickSort;
    comparer : TArraySortComparer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, result);
-   dyn:=TScriptDynamicValueArray(result.GetSelf);
-   comparer:=TArraySortComparer.Create(exec, dyn, CompareExpr);
+   comparer := TArraySortComparer.Create(exec, result, CompareExpr);
    try
-      if dyn.ElementSize>1 then
-         qs.CompareMethod:=comparer.CompareData
-      else qs.CompareMethod:=comparer.CompareValue;
-      qs.SwapMethod:=dyn.Swap;
-      qs.Sort(0, dyn.ArrayLength-1);
+      if result.ElementSize > 1 then
+         qs.CompareMethod := comparer.CompareData
+      else qs.CompareMethod := comparer.CompareValue;
+      qs.SwapMethod := comparer.Swap;
+      qs.Sort(0, result.ArrayLength-1);
    finally
       comparer.Free;
    end;
@@ -2059,55 +2093,9 @@ end;
 // EvalAsScriptDynArray
 //
 procedure TArraySortNaturalExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
-var
-   dyn : TScriptDynamicValueArray;
-   qs : TQuickSort;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, result);
-   dyn:=TScriptDynamicValueArray(result.GetSelf);
-   SetCompareMethod(qs, dyn);
-   qs.SwapMethod:=dyn.Swap;
-   qs.Sort(0, dyn.ArrayLength-1);
-end;
-
-// SetCompareMethod
-//
-procedure TArraySortNaturalExpr.SetCompareMethod(var qs : TQuickSort; dyn : TScriptDynamicValueArray);
-begin
-   raise Exception.CreateFmt('%s does not yet supports %s', [ClassName, dyn.ClassName]);
-end;
-
-// ------------------
-// ------------------ TArraySortNaturalStringExpr ------------------
-// ------------------
-
-// SetCompareMethod
-//
-procedure TArraySortNaturalStringExpr.SetCompareMethod(var qs : TQuickSort; dyn : TScriptDynamicValueArray);
-begin
-   qs.CompareMethod:=dyn.CompareString;
-end;
-
-// ------------------
-// ------------------ TArraySortNaturalIntegerExpr ------------------
-// ------------------
-
-// SetCompareMethod
-//
-procedure TArraySortNaturalIntegerExpr.SetCompareMethod(var qs : TQuickSort; dyn : TScriptDynamicValueArray);
-begin
-   qs.CompareMethod:=dyn.CompareInteger;
-end;
-
-// ------------------
-// ------------------ TArraySortNaturalFloatExpr ------------------
-// ------------------
-
-// SetCompareMethod
-//
-procedure TArraySortNaturalFloatExpr.SetCompareMethod(var qs : TQuickSort; dyn : TScriptDynamicValueArray);
-begin
-   qs.CompareMethod:=dyn.CompareFloat;
+   result.NaturalSort;
 end;
 
 // ------------------
@@ -2165,33 +2153,37 @@ end;
 procedure TArrayMapExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicValueArray;
-   i, itemAddr, elemSize : Integer;
+   i, k, n, itemAddr : Integer;
+   resultElemSize, baseElemSize : Integer;
+   itemPVariant : PVariant;
    funcPointer : IFuncPointer;
-   newPData, oldPData : PData;
+   buf : Variant;
    dc : IDataContext;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
    MapFuncExpr.EvalAsFuncPointer(exec, funcPointer);
 
-   dyn:=TScriptDynamicValueArray(base.GetSelf);
-   oldPData:=dyn.AsPData;
+   result := CreateNewDynamicArray(Typ.Typ);
+   n := base.ArrayLength;
+   result.ArrayLength := n;
 
-   result := TScriptDynamicArray.CreateNew(Typ.Typ);
-   result.ArrayLength := dyn.ArrayLength;
-   newPData := result.AsPData;
+   baseElemSize := base.ElementSize;
+   resultElemSize := result.ElementSize;
 
-   elemSize := result.ElementSize;
-   itemAddr:=exec.Stack.BasePointer+FItem.StackAddr;
-   for i:=0 to dyn.ArrayLength-1 do begin
-      if dyn.ElementSize = 1 then
-         exec.Stack.WriteValue(itemAddr, oldPData^[i])
-      else dyn.CopyData(i*dyn.ElementSize, exec.Stack.Data, itemAddr, dyn.ElementSize);
-      if elemSize = 1 then
-         funcPointer.EvalAsVariant(exec, MapFuncExpr, newPData^[i])
-      else begin
-         dc:=funcPointer.EvalDataPtr(exec,  MapFuncExpr, MapFuncExpr.ResultAddr);
-         dc.CopyData(newPData^, i*elemSize, elemSize);
+   itemAddr := exec.Stack.BasePointer+FItem.StackAddr;
+   itemPVariant := @exec.Stack.Data[itemAddr];
+
+   for i:=0 to n-1 do begin
+      if baseElemSize = 1 then
+         base.EvalAsVariant(i, itemPVariant^)
+      else (base.GetSelf as TScriptDynamicDataArray).CopyData(i*baseElemSize, exec.Stack.Data, itemAddr, baseElemSize);
+      if resultElemSize = 1 then begin
+         funcPointer.EvalAsVariant(exec, MapFuncExpr, buf);
+         result.AsVariant[i] := buf;
+      end else begin
+         dc := funcPointer.EvalDataPtr(exec,  MapFuncExpr, MapFuncExpr.ResultAddr);
+         for k := 0 to resultElemSize-1 do
+            result.AsVariant[i*resultElemSize + k] := dc.AsVariant[k];
       end;
    end;
 end;
@@ -2201,9 +2193,8 @@ end;
 procedure TArrayMapExpr.BaseAsCallback(exec : TdwsExecution; const initial, callback : TArrayDataEnumeratorCallback);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicValueArray;
    destPVariant : PVariant;
-   i : Integer;
+   i, n, elementSize : Integer;
 begin
    if BaseExpr is TArrayMapExpr then begin
 
@@ -2212,19 +2203,20 @@ begin
    end else begin
 
       BaseExpr.EvalAsScriptDynArray(exec, base);
-      dyn := TScriptDynamicValueArray(base.GetSelf);
-      destPVariant := initial(dyn.ArrayLength);
-      if dyn.ElementSize = 1 then begin
+      n := base.ArrayLength;
+      destPVariant := initial(n);
+      elementSize := base.ElementSize;
+      if elementSize = 1 then begin
          i := 0;
-         while i < dyn.ArrayLength do begin
-            VarCopySafe(destPVariant^, dyn.AsPVariant(i)^);
+         while i < n do begin
+            base.EvalAsVariant(i, destPVariant^);
             destPVariant := callback(i);
             Inc(i);
          end;
       end else begin
          i := 0;
-         while i < dyn.ArrayLength do begin
-            dyn.CopyData(i*dyn.ElementSize, destPVariant, dyn.ElementSize);
+         while i < n do begin
+            (base.GetSelf as TScriptDynamicDataArray).CopyData(i*elementSize, destPVariant, elementSize);
             destPVariant := callback(i);
             Inc(i);
          end;
@@ -2369,37 +2361,40 @@ end;
 procedure TArrayFilterExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicValueArray;
-   i, k, elementSize, itemAddr : Integer;
+   i, j, k, n, elementSize, itemAddr : Integer;
    funcPointer : IFuncPointer;
-   newPData, oldPData : PData;
+   itemPVariant : PVariant;
+   buf : Variant;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
    FilterFuncExpr.EvalAsFuncPointer(exec, funcPointer);
 
-   dyn := TScriptDynamicValueArray(base.GetSelf);
-   oldPData := dyn.AsPData;
-
-   result := TScriptDynamicArray.CreateNew(dyn.ElementTyp);
-   result.ArrayLength := dyn.ArrayLength;
-   newPData := result.AsPData;
+   result := CreateNewDynamicArray(base.ElementType);
+   n := base.ArrayLength;
+   result.ArrayLength := n;
    elementSize := result.ElementSize;
    k := 0;
 
    itemAddr := exec.Stack.BasePointer + FItem.StackAddr;
+
    if elementSize = 1 then begin
-      for i := 0 to dyn.ArrayLength-1 do begin
-         exec.Stack.WriteValue(itemAddr, oldPData^[i]);
+      itemPVariant := @exec.Stack.Data[itemAddr];
+      for i := 0 to n-1 do begin
+         base.EvalAsVariant(i, itemPVariant^);
          if funcPointer.EvalAsBoolean(exec, FilterFuncExpr) then begin
-            VarCopySafe(newPData^[k], oldPData^[i]);
+            base.EvalAsVariant(i, buf);
+            Result.AsVariant[k] := buf;
             Inc(k);
          end;
       end;
    end else begin
-      for i := 0 to dyn.ArrayLength-1 do begin
-         dyn.CopyData(i*dyn.ElementSize, exec.Stack.Data, itemAddr, dyn.ElementSize);
+      for i := 0 to n-1 do begin
+         (base.GetSelf as TScriptDynamicDataArray).CopyData(i*elementSize, exec.Stack.Data, itemAddr, elementSize);
          if funcPointer.EvalAsBoolean(exec, FilterFuncExpr) then begin
-            dyn.CopyData(i*dyn.ElementSize, newPData^, k*elementSize, elementSize);
+            for j := 0 to elementSize-1 do begin
+               base.EvalAsVariant(i*elementSize + j, buf);
+               result.AsVariant[k*elementSize + j] := buf;
+            end;
             Inc(k);
          end;
       end;
@@ -2465,67 +2460,82 @@ end;
 // DoEval
 //
 procedure TArrayAddExpr.DoEval(exec : TdwsExecution; var base : IScriptDynArray);
+var
+   arrayLength : Integer;
 
-   procedure AddDataArg(dyn : TScriptDynamicArray; arg : TTypedExpr);
+   procedure AddDataArg(arg : TTypedExpr);
    var
-      n : Integer;
-      argdata : TDataExpr;
+      elemSize : Integer;
+      argData : TDataExpr;
+      buf : Variant;
    begin
-      n := dyn.ArrayLength;
-      dyn.ArrayLength := n+1;
-      if arg.Typ.Size > 1 then begin
+      Inc(arrayLength);
+      base.ArrayLength := arrayLength;
+      elemSize := arg.Typ.Size;
+      if elemSize > 1 then begin
          argData := (arg as TDataExpr);
-         dyn.WriteData(n*dyn.ElementSize, argData.DataPtr[exec], dyn.ElementSize);
-      end else arg.EvalAsVariant(exec, dyn.AsPVariant(n)^);
+         (base.GetSelf as TScriptDynamicDataArray).WriteData((arrayLength-1)*elemSize, argData.DataPtr[exec], elemSize);
+      end else begin
+         arg.EvalAsVariant(exec, buf);
+         base.AsVariant[arrayLength-1] := buf;
+      end;
    end;
 
-   procedure AddStaticArrayArg(dyn : TScriptDynamicArray; arg : TTypedExpr);
+   procedure AddStaticArrayArg(arg : TTypedExpr);
    var
-      k, n : Integer;
+      k, n, i, elemSize : Integer;
+      dc : IDataContext;
    begin
-      k := arg.Typ.Size div dyn.ElementSize;
+      elemSize := base.ElementSize;
+      k := arg.Typ.Size div elemSize;
       if k > 0 then begin
-         n := dyn.ArrayLength;
-         dyn.ArrayLength := n + k;
-         if arg is TArrayConstantExpr then
-            TArrayConstantExpr(arg).EvalToTData(exec, dyn.AsPData^, n*dyn.ElementSize)
-         else dyn.WriteData(n*dyn.ElementSize, (arg as TDataExpr).DataPtr[exec], k*dyn.ElementSize);
+         n := arrayLength;
+         Inc(arrayLength, k);
+         base.ArrayLength := arrayLength;
+         if elemSize > 1 then begin
+            (base.GetSelf as TScriptDynamicDataArray).WriteData(n*elemSize, (arg as TDataExpr).DataPtr[exec], k*elemSize);
+         end else begin
+            dc := (arg as TDataExpr).DataPtr[exec];
+            for i := 0 to k-1 do
+               base.AsVariant[n+i] := dc.AsVariant[i];
+         end;
       end;
    end;
 
 var
    src : IScriptDynArray;
-   dyn, dynSrc : TScriptDynamicArray;
-   i, n : Integer;
+   i : Integer;
    arg : TTypedExpr;
+   elementTyp : TTypeSymbol;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
+
+   elementTyp := base.ElementType;
+   arrayLength := base.ArrayLength;
 
    for i:=0 to FArgs.Count-1 do begin
       arg:=TTypedExpr(FArgs.List[i]);
 
-      if dyn.ElementTyp.IsCompatible(arg.Typ) then begin
+      if elementTyp.IsCompatible(arg.Typ) then begin
 
-         AddDataArg(dyn, arg);
+         AddDataArg(arg);
 
       end else if arg.Typ.ClassType=TDynamicArraySymbol then begin
 
          arg.EvalAsScriptDynArray(exec, src);
-         dynSrc:=(src.GetSelf as TScriptDynamicArray);
+         base.Concat(src, 0, MaxInt);
+         arrayLength := base.ArrayLength;
 
-         dyn.Concat(dynSrc);
+      end else if arg.Typ.UnAliasedTypeIs(TBaseIntegerSymbol) and elementTyp.UnAliasedTypeIs(TBaseFloatSymbol)  then begin
 
-      end else if arg.Typ.UnAliasedTypeIs(TBaseIntegerSymbol) and dyn.ElementTyp.UnAliasedTypeIs(TBaseFloatSymbol)  then begin
-
-         n := dyn.ArrayLength;
-         dyn.ArrayLength := n+1;
-         dyn.AsFloat[n] := arg.EvalAsFloat(exec);
+         Inc(arrayLength);
+         base.ArrayLength := arrayLength;
+         base.AsFloat[arrayLength-1] := arg.EvalAsFloat(exec);
 
       end else begin
 
          Assert(arg.Typ is TStaticArraySymbol);
-         AddStaticArrayArg(dyn, arg);
+         AddStaticArrayArg(arg);
 
       end;
    end;
@@ -2653,37 +2663,36 @@ begin
    Result:=1;
 end;
 
-// GetBaseDynArray
-//
-function TArrayDataExpr.GetBaseDynArray(exec : TdwsExecution) : TScriptDynamicArray;
-var
-   base : IScriptDynArray;
-begin
-   BaseExpr.EvalAsScriptDynArray(exec, base);
-   Result:=TScriptDynamicArray(base.GetSelf);
-end;
-
 // ------------------
 // ------------------ TArrayPeekExpr ------------------
 // ------------------
+
+// InternalEvalPeek
+//
+procedure TArrayPeekExpr.InternalEvalPeek(exec : TdwsExecution; var base : IScriptDynArray);
+var
+   idx, elemSize : Integer;
+begin
+   BaseExpr.EvalAsScriptDynArray(exec, base);
+   idx := base.ArrayLength - 1;
+   if idx < 0 then
+      RaiseUpperExceeded(exec, 0);
+
+   elemSize := Typ.Size;
+   if elemSize = 1 then begin
+      base.EvalAsVariant(idx, exec.Stack.Data[exec.Stack.BasePointer+FResultAddr]);
+   end else begin
+      (base.GetSelf as TScriptDynamicDataArray).CopyData(idx*elemSize, exec.Stack.Data, exec.Stack.BasePointer+FResultAddr, elemSize);
+   end;
+end;
 
 // EvalNoResult
 //
 procedure TArrayPeekExpr.EvalNoResult(exec : TdwsExecution);
 var
-   dyn : TScriptDynamicArray;
-   idx : Integer;
+   base : IScriptDynArray;
 begin
-   dyn := GetBaseDynArray(exec);
-   idx := dyn.ArrayLength - 1;
-   if idx < 0 then
-      RaiseUpperExceeded(exec, 0);
-
-   if dyn.ElementSize = 1 then begin
-      dyn.EvalAsVariant(idx, exec.Stack.Data[exec.Stack.BasePointer+FResultAddr]);
-   end else begin
-      dyn.CopyData(idx*dyn.ElementSize, exec.Stack.Data, exec.Stack.BasePointer+FResultAddr, dyn.ElementSize);
-   end;
+   InternalEvalPeek(exec, base);
 end;
 
 // SpecializeDataExpr
@@ -2705,12 +2714,11 @@ end;
 //
 procedure TArrayPopExpr.EvalNoResult(exec : TdwsExecution);
 var
-   dyn : TScriptDynamicArray;
+   base : IScriptDynArray;
 begin
-   inherited EvalNoResult(exec);
+   InternalEvalPeek(exec, base);
 
-   dyn:=GetBaseDynArray(exec);
-   dyn.Delete(dyn.ArrayLength-1, 1);
+   base.Delete(base.ArrayLength-1, 1);
 end;
 
 // SpecializeDataExpr
@@ -2752,20 +2760,21 @@ end;
 procedure TArrayDeleteExpr.EvalNoResult(exec : TdwsExecution);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
    index, count : Integer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
-   index:=IndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, dyn.ArrayLength, index);
-   if CountExpr<>nil then begin
-      count:=CountExpr.EvalAsInteger(exec);
-      if count<0 then
+
+   index := IndexExpr.EvalAsInteger(exec);
+   if not base.BoundsCheckPassed(index) then
+      BoundsCheckFailed(exec, index);
+   if CountExpr <> nil then begin
+      count := CountExpr.EvalAsInteger(exec);
+      if count <0 then
          RaiseScriptError(exec, EScriptError.CreateFmt(RTE_PositiveCountExpected, [count]));
-      BoundsCheck(exec, dyn.ArrayLength, index+count-1);
-   end else count:=1;
-   dyn.Delete(index, count);
+      if not base.BoundsCheckPassed(index+count-1) then
+         BoundsCheckFailed(exec, index+count-1);
+   end else count := 1;
+   base.Delete(index, count);
 end;
 
 // GetSubExpr
@@ -2826,26 +2835,22 @@ end;
 procedure TArrayCopyExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
    index, count : Integer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
-   if IndexExpr<>nil then begin
-      index:=IndexExpr.EvalAsInteger(exec);
-      BoundsCheck(exec, dyn.ArrayLength, index);
-   end else index:=0;
-   if CountExpr<>nil then begin
-      count:=CountExpr.EvalAsInteger(exec);
-      if count<0 then
+   if IndexExpr <> nil then begin
+      index := IndexExpr.EvalAsInteger(exec);
+      if not base.BoundsCheckPassed(index) then
+         BoundsCheckFailed(exec, index);
+   end else index := 0;
+   if CountExpr <> nil then begin
+      count := CountExpr.EvalAsInteger(exec);
+      if count < 0 then
          RaiseScriptError(exec, EScriptError.CreateFmt(RTE_PositiveCountExpected, [count]));
-      if index+count >= dyn.ArrayLength then
-         count := dyn.ArrayLength-index;
-   end else count:=dyn.ArrayLength-index;
+   end else count := MaxInt;
 
-   Result := TScriptDynamicArray.CreateNew(dyn.ElementTyp);
-   if count>0 then
-      (Result.GetSelf as TScriptDynamicArray).Copy(dyn, index, count);
+   result := CreateNewDynamicArray(base.ElementType);
+   result.Concat(base, index, count);
 end;
 
 // GetSubExpr
@@ -2895,25 +2900,28 @@ end;
 procedure TArrayInsertExpr.EvalNoResult(exec : TdwsExecution);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
-   n, index : Integer;
+   n, index, elemSize : Integer;
+   buf : Variant;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
 
-   n:=dyn.ArrayLength;
+   n := base.ArrayLength;
 
-   index:=IndexExpr.EvalAsInteger(exec);
-   if index=n then
-      dyn.ArrayLength:=n+1
+   index := IndexExpr.EvalAsInteger(exec);
+   if index = n then
+      base.ArrayLength := n+1
    else begin
       BoundsCheck(exec, n, index);
-      dyn.Insert(index);
+      base.Insert(index);
    end;
 
-   if ItemExpr.Typ.Size>1 then
-      dyn.WriteData(index*dyn.ElementSize, (ItemExpr as TDataExpr).DataPtr[exec], dyn.ElementSize)
-   else ItemExpr.EvalAsVariant(exec, dyn.AsPVariant(index)^);
+   elemSize := ItemExpr.Typ.Size;
+   if elemSize > 1 then
+      (base.GetSelf as TScriptDynamicDataArray).WriteData(index*elemSize, (ItemExpr as TDataExpr).DataPtr[exec], elemSize)
+   else begin
+      ItemExpr.EvalAsVariant(exec, buf);
+      base.AsVariant[index] := buf;
+   end;
 end;
 
 // GetSubExpr
@@ -2963,21 +2971,19 @@ end;
 procedure TArrayMoveExpr.EvalNoResult(exec : TdwsExecution);
 var
    base : IScriptDynArray;
-   dyn : TScriptDynamicArray;
-   n, indexOrigin, indexDest : Integer;
+   indexOrigin, indexDest : Integer;
 begin
    BaseExpr.EvalAsScriptDynArray(exec, base);
-   dyn:=TScriptDynamicArray(base.GetSelf);
-
-   n:=dyn.ArrayLength;
 
    indexOrigin := OriginIndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, n, indexOrigin);
+   if not base.BoundsCheckPassed(indexOrigin) then
+      BoundsCheckFailed(exec, indexOrigin);
    indexDest := DestinationIndexExpr.EvalAsInteger(exec);
-   BoundsCheck(exec, n, indexDest);
+   if not base.BoundsCheckPassed(indexDest) then
+      BoundsCheckFailed(exec, indexDest);
 
    if indexOrigin <> indexDest then
-      dyn.MoveItem(indexOrigin, indexDest);
+      base.MoveItem(indexOrigin, indexDest);
 end;
 
 // GetSubExpr
@@ -3182,7 +3188,7 @@ var
    a : IScriptAssociativeArray;
 begin
    Expr.EvalAsScriptAssociativeArray(exec, a);
-   Result := TScriptDynamicArray.CreateNew(Typ.Typ);
+   result := CreateNewDynamicArray(Typ.Typ);
    if a <> nil then
       Result.ReplaceData((a.GetSelf as TScriptAssociativeArray).CopyKeys);
 end;
