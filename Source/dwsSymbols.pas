@@ -385,7 +385,7 @@ type
          FFlags : TSymbolTableFlags;
 
          function GetParentCount : Integer;
-         function GetParents(Index: Integer) : TSymbolTable;
+         function GetParents(Index: Integer) : TSymbolTable; inline;
 
       protected
          function GetSymbol(Index: Integer): TSymbol; inline;
@@ -574,10 +574,21 @@ type
          property StackAddr: Integer read FStackAddr write FStackAddr;
    end;
 
+   TScriptDataSymbolPurpose = (
+      sdspGeneral,         // general purpose / unspecified use case
+      sdspLoopIterator     // iterator variable in a for loop
+   );
+
    // used for script engine internal purposes
    TScriptDataSymbol = class sealed (TDataSymbol)
+      private
+         FPurpose : TScriptDataSymbolPurpose;
+
       public
+         constructor Create(const aName : String; aType : TTypeSymbol; aPurpose : TScriptDataSymbolPurpose = sdspGeneral);
          function Specialize(const context : ISpecializationContext) : TSymbol; override;
+
+         property Purpose : TScriptDataSymbolPurpose read FPurpose write FPurpose;
    end;
 
    // used for variables
@@ -830,8 +841,11 @@ type
          function GetIsAsync : Boolean; inline;
          procedure SetIsAsync(const val : Boolean); inline;
 
-         function GetSourcePosition : TScriptPos; virtual;
-         procedure SetSourcePosition(const val : TScriptPos); virtual;
+         function GetDeclarationPosition : TScriptPos; virtual;
+         procedure SetDeclarationPosition(const val : TScriptPos); virtual;
+         function GetImplementationPosition : TScriptPos; virtual;
+         procedure SetImplementationPosition(const val : TScriptPos); virtual;
+
          function GetExternalName : String;
 
          function GetSourceSubExpr(i : Integer) : TExprBase;
@@ -897,7 +911,9 @@ type
          property Result : TDataSymbol read FResult;
          property Typ : TTypeSymbol read FTyp write SetType;
          property Conditions : TConditionsSymbolTable read FConditions;
-         property SourcePosition : TScriptPos read GetSourcePosition write SetSourcePosition;
+
+         property DeclarationPosition : TScriptPos read GetDeclarationPosition write SetDeclarationPosition;
+         property ImplementationPosition : TScriptPos read GetImplementationPosition write SetImplementationPosition;
    end;
 
    // referring list of function symbols
@@ -916,11 +932,14 @@ type
 
    TSourceFuncSymbol = class sealed (TFuncSymbol)
       private
-         FSourcePosition : TScriptPos;
+         FDeclarationPosition : TScriptPos;
+         FImplementationPosition : TScriptPos;
 
       protected
-         function GetSourcePosition : TScriptPos; override;
-         procedure SetSourcePosition(const val : TScriptPos); override;
+         function GetDeclarationPosition : TScriptPos; override;
+         procedure SetDeclarationPosition(const val : TScriptPos); override;
+         function GetImplementationPosition : TScriptPos; override;
+         procedure SetImplementationPosition(const val : TScriptPos); override;
 
       public
          function SpecializeType(const context : ISpecializationContext) : TTypeSymbol; override;
@@ -1024,16 +1043,16 @@ type
 
    TSourceMethodSymbol = class (TMethodSymbol)
       private
-         FDeclarationPos : TScriptPos;
-         FSourcePosition : TScriptPos;
+         FDeclarationPosition : TScriptPos;
+         FImplementationPosition : TScriptPos;
 
       protected
-         function GetSourcePosition : TScriptPos; override;
-         procedure SetSourcePosition(const val : TScriptPos); override;
+         function GetDeclarationPosition : TScriptPos; override;
+         procedure SetDeclarationPosition(const val : TScriptPos); override;
+         function GetImplementationPosition : TScriptPos; override;
+         procedure SetImplementationPosition(const val : TScriptPos); override;
 
       public
-         property DeclarationPos : TScriptPos read FDeclarationPos write FDeclarationPos;
-
          property SubExpr;
          property SubExprCount;
    end;
@@ -1043,7 +1062,8 @@ type
          FAlias : TFuncSymbol;
 
       protected
-         function GetSourcePosition : TScriptPos; override;
+         function GetDeclarationPosition : TScriptPos; override;
+         function GetImplementationPosition : TScriptPos; override;
 
       public
          function IsPointerType : Boolean; override;
@@ -1343,11 +1363,14 @@ type
       private
          FOwner : TCompositeTypeSymbol;
 
+
       public
          procedure AddParent(parent : TMembersSymbolTable);
+
          function FindSymbol(const aName : String; minVisibility : TdwsVisibility; ofClass : TSymbolClass = nil) : TSymbol; override;
-         function VisibilityFromScope(scopeSym : TCompositeTypeSymbol) : TdwsVisibility;
          function FindSymbolFromScope(const aName : String; scopeSym : TCompositeTypeSymbol) : TSymbol; reintroduce;
+
+         function VisibilityFromScope(scopeSym : TCompositeTypeSymbol) : TdwsVisibility;
          function Visibilities : TdwsVisibilities;
 
          property Owner : TCompositeTypeSymbol read FOwner write FOwner;
@@ -2875,7 +2898,7 @@ end;
 //
 function CompareSourceMethSymbolByDeclarePos(a, b : Pointer) : Integer;
 begin
-   Result := TSourceMethodSymbol(a).DeclarationPos.Compare(TSourceMethodSymbol(b).DeclarationPos);
+   Result := TSourceMethodSymbol(a).DeclarationPosition.Compare(TSourceMethodSymbol(b).DeclarationPosition);
 end;
 procedure TCompositeTypeSymbol.CheckMethodsImplemented(const msgs : TdwsCompileMessageList);
 
@@ -2926,7 +2949,7 @@ begin
       errorList.Sort(CompareSourceMethSymbolByDeclarePos);
       for i := 0 to errorList.Count-1 do begin
          methSym := TMethodSymbol(errorList.List[i]);
-         msg:=msgs.AddCompilerErrorFmt(TSourceMethodSymbol(methSym).DeclarationPos, CPE_MethodNotImplemented,
+         msg:=msgs.AddCompilerErrorFmt(methSym.DeclarationPosition, CPE_MethodNotImplemented,
                                        [methSym.Name, methSym.StructSymbol.Caption]);
          CreateAutoFixAddImplementation(msg, methSym);
       end;
@@ -4090,18 +4113,32 @@ begin
    else Exclude(FFlags, fsfAsync);
 end;
 
-// GetSourcePosition
+// GetDeclarationPosition
 //
-function TFuncSymbol.GetSourcePosition : TScriptPos;
+function TFuncSymbol.GetDeclarationPosition : TScriptPos;
 begin
-   Result:=cNullPos;
+   Result := cNullPos;
 end;
 
-// SetSourcePosition
+// SetDeclarationPosition
 //
-procedure TFuncSymbol.SetSourcePosition(const val : TScriptPos);
+procedure TFuncSymbol.SetDeclarationPosition(const val : TScriptPos);
 begin
-   // ignore
+   Assert(False);
+end;
+
+// GetImplementationPosition
+//
+function TFuncSymbol.GetImplementationPosition : TScriptPos;
+begin
+   Result := cNullPos;
+end;
+
+// SetImplementationPosition
+//
+procedure TFuncSymbol.SetImplementationPosition(const val : TScriptPos);
+begin
+   Assert(False);
 end;
 
 // GetExternalName
@@ -4403,18 +4440,32 @@ end;
 // ------------------ TSourceFuncSymbol ------------------
 // ------------------
 
-// GetSourcePosition
+// GetDeclarationPosition
 //
-function TSourceFuncSymbol.GetSourcePosition : TScriptPos;
+function TSourceFuncSymbol.GetDeclarationPosition : TScriptPos;
 begin
-   Result:=FSourcePosition;
+   Result := FDeclarationPosition;
 end;
 
-// SetSourcePosition
+// SetDeclarationPosition
 //
-procedure TSourceFuncSymbol.SetSourcePosition(const val : TScriptPos);
+procedure TSourceFuncSymbol.SetDeclarationPosition(const val : TScriptPos);
 begin
-   FSourcePosition:=val;
+   FDeclarationPosition := val;
+end;
+
+// GetImplementationPosition
+//
+function TSourceFuncSymbol.GetImplementationPosition : TScriptPos;
+begin
+   Result := FImplementationPosition;
+end;
+
+// SetImplementationPosition
+//
+procedure TSourceFuncSymbol.SetImplementationPosition(const val : TScriptPos);
+begin
+   FImplementationPosition := val;
 end;
 
 // SpecializeType
@@ -4425,7 +4476,9 @@ var
 begin
    specializedFunc := TSourceFuncSymbol.Create(context.Name, Kind, Level);
 
-   specializedFunc.FSourcePosition := FSourcePosition;
+   specializedFunc.DeclarationPosition := DeclarationPosition;
+   specializedFunc.ImplementationPosition := ImplementationPosition;
+
    InternalSpecialize(specializedFunc, context);
    Result := specializedFunc;
 
@@ -4833,18 +4886,32 @@ end;
 // ------------------ TSourceMethodSymbol ------------------
 // ------------------
 
-// GetSourcePosition
+// GetDeclarationPosition
 //
-function TSourceMethodSymbol.GetSourcePosition : TScriptPos;
+function TSourceMethodSymbol.GetDeclarationPosition : TScriptPos;
 begin
-   Result:=FSourcePosition;
+   Result := FDeclarationPosition;
 end;
 
-// SetSourcePosition
+// SetDeclarationPosition
 //
-procedure TSourceMethodSymbol.SetSourcePosition(const val : TScriptPos);
+procedure TSourceMethodSymbol.SetDeclarationPosition(const val : TScriptPos);
 begin
-   FSourcePosition:=val;
+   FDeclarationPosition := val;
+end;
+
+// GetImplementationPosition
+//
+function TSourceMethodSymbol.GetImplementationPosition : TScriptPos;
+begin
+   Result := FImplementationPosition;
+end;
+
+// SetImplementationPosition
+//
+procedure TSourceMethodSymbol.SetImplementationPosition(const val : TScriptPos);
+begin
+   FImplementationPosition := val;
 end;
 
 // ------------------
@@ -6288,11 +6355,19 @@ end;
 // ------------------ TScriptDataSymbol ------------------
 // ------------------
 
+// Create
+//
+constructor TScriptDataSymbol.Create(const aName : String; aType : TTypeSymbol; aPurpose : TScriptDataSymbolPurpose = sdspGeneral);
+begin
+   inherited Create(aName, aType);
+   Purpose := aPurpose;
+end;
+
 // Specialize
 //
 function TScriptDataSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
 begin
-   Result := TScriptDataSymbol.Create(Name, context.SpecializeType(Typ));
+   Result := TScriptDataSymbol.Create(Name, context.SpecializeType(Typ), Purpose);
 end;
 
 // ------------------
@@ -6642,7 +6717,7 @@ begin
       end;
    end;
    Result := nil;
-end;          //}
+end;
 
 // FindTypeLocal
 //
@@ -6716,10 +6791,9 @@ function TSymbolTable.FindSymbol(const aName : String; minVisibility : TdwsVisib
                                  ofClass : TSymbolClass = nil) : TSymbol;
 var
    i : Integer;
-   parentSymTable : TSymbolTable;
 begin
    // Find Symbol in the local List
-   Result:=FindLocal(aName, ofClass);
+   Result := FindLocal(aName, ofClass);
    if Assigned(Result) then begin
       if Result.IsVisibleFor(minVisibility) then
          Exit
@@ -6727,9 +6801,8 @@ begin
    end;
 
    // Find Symbol in all parent lists
-   for i:=0 to ParentCount-1 do begin
-      parentSymTable:=Parents[i];
-      Result:=parentSymTable.FindSymbol(aName, minVisibility, ofClass);
+   for i := 0 to ParentCount-1 do begin
+      Result := Parents[i].FindSymbol(aName, minVisibility, ofClass);
       if Assigned(Result) then Break;
    end;
 end;
@@ -7083,7 +7156,7 @@ end;
 
 // InsertParent
 //
-procedure TSymbolTable.InsertParent(Index: Integer; Parent: TSymbolTable);
+procedure TSymbolTable.InsertParent(Index: Integer; parent: TSymbolTable);
 begin
    Include(Parent.FFlags, stfHasChildTables);
    FParents.Insert(Index, Parent);
@@ -7180,7 +7253,7 @@ var
    i : Integer;
 begin
    // Find Symbol in the local List
-   Result:=FindLocal(aName, ofClass);
+   Result := FindLocal(aName, ofClass);
    if Assigned(Result) then begin
       if Result.IsVisibleFor(minVisibility) then Exit;
       // try harder in case of overload with different visibility
@@ -7192,12 +7265,12 @@ begin
    Result:=nil;
 
    // Find Symbol in all parent lists
-   if minVisibility=cvPrivate then
-      minVisibility:=cvProtected;
-   i:=0;
-   while not Assigned(Result) and (i<ParentCount) do begin
-      Result:=(Parents[i] as TMembersSymbolTable).FindSymbol(aName, minVisibility, ofClass);
-      Inc(i);
+   if minVisibility = cvPrivate then
+      minVisibility := cvProtected;
+
+   for i := 0 to ParentCount-1 do begin
+      Result := Parents[i].FindSymbol(aName, minVisibility, ofClass);
+      if Assigned(Result) then Break;
    end;
 end;
 
@@ -9220,11 +9293,18 @@ end;
 // ------------------ TAliasMethodSymbol ------------------
 // ------------------
 
-// GetSourcePosition
+// GetDeclarationPosition
 //
-function TAliasMethodSymbol.GetSourcePosition : TScriptPos;
+function TAliasMethodSymbol.GetDeclarationPosition : TScriptPos;
 begin
-   Result:=Alias.GetSourcePosition;
+   Result := Alias.GetDeclarationPosition;
+end;
+
+// GetImplementationPosition
+//
+function TAliasMethodSymbol.GetImplementationPosition : TScriptPos;
+begin
+   Result := Alias.GetImplementationPosition;
 end;
 
 // IsPointerType
