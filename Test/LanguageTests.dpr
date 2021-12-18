@@ -58,7 +58,6 @@ uses
   UdwsCryptoTests in 'UdwsCryptoTests.pas',
   UdwsGraphicsTests in 'UdwsGraphicsTests.pas',
   dwsSymbolsLibModule in '..\Libraries\SymbolsLib\dwsSymbolsLibModule.pas',
-  //UExternalFunctionTests in 'UExternalFunctionTests.pas',
   UdwsEncodingTests in 'UdwsEncodingTests.pas',
   UInstantiateTests in 'UInstantiateTests.pas',
   UdwsWebUtilsTests in 'UdwsWebUtilsTests.pas',
@@ -74,7 +73,9 @@ uses
   dwsTokenTypes in '..\Source\dwsTokenTypes.pas',
   dwsSQLiteVTArraysLibModule,
   dwsDynamicArrays in '..\Source\dwsDynamicArrays.pas',
-  dwsArrayExprs in '..\Source\dwsArrayExprs.pas';
+  dwsArrayExprs in '..\Source\dwsArrayExprs.pas',
+  UdwsTabularTests in 'UdwsTabularTests.pas',
+  UdwsCSSPackTests in 'UdwsCSSPackTests.pas';
 
 {$R *.res}
 

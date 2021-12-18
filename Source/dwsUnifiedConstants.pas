@@ -66,6 +66,8 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
+uses dwsScriptSource;
+
 // ------------------
 // ------------------ TUnifiedConstants ------------------
 // ------------------
@@ -81,24 +83,32 @@ var
 begin
    inherited Create;
    // no lock is required here
-   FEmptyString := TConstStringExpr.Create(systemTable.TypString, '');
+   FEmptyString := TConstStringExpr.Create(cNullPos, systemTable.TypString, '');
    for i:=Low(FIntegers) to High(FIntegers) do
-      FIntegers[i] := TConstIntExpr.Create(systemTable.TypInteger, Int64(i));
-   FZeroFloat := TConstFloatExpr.Create(systemTable.TypFloat, cZeroFloat);
-   FTrue := TConstBooleanExpr.Create(systemTable.TypBoolean, True);
-   FFalse := TConstBooleanExpr.Create(systemTable.TypBoolean, False);
-   FNil := TConstNilExpr.Create(systemTable.TypNil);
+      FIntegers[i] := TConstIntExpr.Create(cNullPos, systemTable.TypInteger, Int64(i));
+   FZeroFloat := TConstFloatExpr.Create(cNullPos, systemTable.TypFloat, cZeroFloat);
+   FTrue := TConstBooleanExpr.Create(cNullPos, systemTable.TypBoolean, True);
+   FFalse := TConstBooleanExpr.Create(cNullPos, systemTable.TypBoolean, False);
+   FNil := TConstNilExpr.Create(cNullPos, systemTable.TypNil);
 end;
 
 // Destroy
 //
 destructor TUnifiedConstants.Destroy;
+
+   procedure RaiseAssert(i, refCount : Integer);
+   begin
+      Assert(False, 'Int ' + FastInt64ToStr(i) + ' count ' + FastInt64ToStr(refCount));
+   end;
+
 var
-   i : Integer;
+   i, r : Integer;
 begin
    FEmptyString.Free;
-   for i:=Low(FIntegers) to High(FIntegers) do begin
-      Assert(FIntegers[i].RefCount=0);
+   for i := Low(FIntegers) to High(FIntegers) do begin
+      r := FIntegers[i].RefCount;
+      if r <> 0 then
+         RaiseAssert(i, r);
       FIntegers[i].Free;
    end;
    FZeroFloat.Free;
@@ -122,7 +132,7 @@ function TUnifiedConstants.CreateString(const s : String) : TConstStringExpr;
 begin
    if s = '' then
       Result := CreateEmptyString
-   else Result := TConstStringExpr.Create(FEmptyString.Typ, s);
+   else Result := TConstStringExpr.Create(cNullPos, FEmptyString.Typ, s);
 end;
 
 // CreateInteger
@@ -134,7 +144,7 @@ begin
       Result := FIntegers[i];
       Result.IncRefCount;
    end else begin
-      Result := TConstIntExpr.Create(FIntegers[0].Typ, i);
+      Result := TConstIntExpr.Create(cNullPos, FIntegers[0].Typ, i);
    end;
 end;
 
@@ -147,7 +157,7 @@ begin
       Result := FZeroFloat;
       Result.IncRefCount;
    end else begin
-      Result := TConstFloatExpr.Create(FZeroFloat.Typ, f);
+      Result := TConstFloatExpr.Create(cNullPos, FZeroFloat.Typ, f);
    end;
 end;
 

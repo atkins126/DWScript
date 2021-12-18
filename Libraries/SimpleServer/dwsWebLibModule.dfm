@@ -821,6 +821,16 @@ object dwsWebLib: TdwsWebLib
             Kind = mkClassProcedure
           end
           item
+            Name = 'SetKeepAlive'
+            Parameters = <
+              item
+                Name = 'keepAlive'
+                DataType = 'Boolean'
+              end>
+            OnEval = dwsWebClassesHttpQueryMethodsSetKeepAliveEval
+            Kind = mkClassProcedure
+          end
+          item
             Name = 'SetCustomHeaders'
             Parameters = <
               item
@@ -830,6 +840,12 @@ object dwsWebLib: TdwsWebLib
             Attributes = [maStatic]
             OnEval = dwsWebClassesHttpQueryMethodsSetCustomHeadersEval
             Kind = mkClassProcedure
+          end
+          item
+            Name = 'GetKeepAlive'
+            ResultType = 'Boolean'
+            OnEval = dwsWebClassesHttpQueryMethodsGetKeepAliveEval
+            Kind = mkClassFunction
           end>
         Properties = <
           item
@@ -842,6 +858,12 @@ object dwsWebLib: TdwsWebLib
             Name = 'ConnectTimeoutMSec'
             DataType = 'Integer'
             WriteAccess = 'SetConnectTimeoutMSec'
+          end
+          item
+            Name = 'KeepAlive'
+            DataType = 'Boolean'
+            ReadAccess = 'GetKeepAlive'
+            WriteAccess = 'SetKeepAlive'
           end>
       end
       item
@@ -1142,6 +1164,20 @@ object dwsWebLib: TdwsWebLib
           end>
         ResultType = 'Integer'
         OnFastEval = dwsWebFunctionsPingIPv4FastEval
+      end
+      item
+        Name = 'PingIPv6'
+        Parameters = <
+          item
+            Name = 'hostName'
+            DataType = 'String'
+          end
+          item
+            Name = 'timeOutMSec'
+            DataType = 'Integer'
+          end>
+        ResultType = 'Integer'
+        OnFastEval = dwsWebFunctionsPingIPv6FastEval
       end>
     UnitName = 'System.Net'
     StaticSymbols = True

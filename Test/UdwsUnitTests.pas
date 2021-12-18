@@ -140,6 +140,7 @@ type
          procedure FastMethodEvalExceptTest;
          procedure ArrayOfObjects;
          procedure FuncVariantTest;
+         procedure FuncVariantCastTest;
          procedure FuncVariantDateTest;
          procedure FuncNilTest;
          procedure SetTest;
@@ -2436,8 +2437,8 @@ begin
 
    CheckEquals('', prog.Msgs.AsInfo, 'Compile');
 
-   CheckEquals( 'Object not instantiated'#13#10
-               +'Object already destroyed'#13#10,
+   CheckEquals( 'Object not instantiated [line: 2, column: 11]'#13#10
+               +'Object already destroyed [line: 4, column: 11]'#13#10,
                prog.Execute.Result.ToString,
                'exec');
 end;
@@ -2484,6 +2485,39 @@ begin
 
    CheckEquals('', prog.Execute.Msgs.AsInfo, 'exec errs');
    CheckEquals('12312.5456helloTrue', prog.Execute.Result.ToString, 'exec result');
+end;
+
+// FuncVariantCastTest
+//
+procedure TdwsUnitTests.FuncVariantCastTest;
+var
+   prog : IdwsProgram;
+begin
+   prog:=FCompiler.Compile( 'var i : Integer; var f : Float; var s : String;'#13#10
+                           +'i:=FuncVariant("123");'#13#10
+                           +'Print(i);'#13#10
+                           +'i:=FuncInc(4);'#13#10
+                           +'Print(i);'#13#10
+                           +'f:=FuncVariant("12.5");'#13#10
+                           +'Print(f);'#13#10
+                           +'f:=FuncVariant(456);'#13#10
+                           +'Print(f);'#13#10
+                           +'f:=FuncFloat(7);'#13#10
+                           +'Print(f);'#13#10
+                           +'s:=FuncVariant(1);'#13#10
+                           +'Print(s);'#13#10
+                           +'s:=FuncVariant("a");'#13#10
+                           +'PrintLn(s);'#13#10
+                           +'function TestStr : String; begin Result := "hello"; end;'#13#10
+                           +'Print(TestStr);'#13#10
+                           +'function TestInt : Integer; begin Result := 123; end;'#13#10
+                           +'Print(TestInt);'#13#10
+                           );
+
+   CheckEquals('', prog.Msgs.AsInfo, 'Compile 1');
+
+   CheckEquals('', prog.Execute.Msgs.AsInfo, 'exec errs');
+   CheckEquals('123512.54567.51a'#13#10'hello123', prog.Execute.Result.ToString, 'exec result');
 end;
 
 // FuncVariantDateTest

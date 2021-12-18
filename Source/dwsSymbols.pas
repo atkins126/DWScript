@@ -235,7 +235,7 @@ type
          procedure EvalNoResult(exec : TdwsExecution); virtual;
 
          procedure EvalAsSafeScriptObj(exec : TdwsExecution; var result : IScriptObj); overload;
-         function  EvalAsSafeScriptObj(exec : TdwsExecution) : IScriptObj; overload; inline;
+         function  EvalAsSafeScriptObj(exec : TdwsExecution) : IScriptObj; overload; inline; deprecated;
 
          procedure AssignValue(exec : TdwsExecution; const value : Variant); virtual; abstract;
          procedure AssignValueAsInteger(exec : TdwsExecution; const value : Int64); virtual; abstract;
@@ -3931,7 +3931,9 @@ function TFuncSymbol.GetDescription : String;
 begin
    Result := cFuncKindToString[Kind] + ' ' + Name + ParamsDescription;
    if Typ <> nil then
-      Result := Result + ': ' + Typ.Name;
+      if Typ.Name <> '' then
+         Result := Result + ': ' + Typ.Name
+      else Result := Result + ': ' + Typ.Caption;
 end;
 
 // Initialize
@@ -5510,8 +5512,10 @@ begin
       for sym in FMembers do begin
          if sym is TMethodSymbol then begin
             meth:=TMethodSymbol(sym);
-            if meth.IsVirtual then
-               FVirtualMethodTable[meth.FVMTIndex]:=meth;
+            if meth.IsVirtual and (meth.FVMTIndex >= 0) then begin
+               Assert(meth.FVMTIndex < v);
+               FVirtualMethodTable[meth.FVMTIndex] := meth;
+            end;
          end;
       end;
    end;
@@ -8728,6 +8732,7 @@ end;
 {$ELSE}
   {$UNDEF RANGEON}
 {$ENDIF}
+{$Q-}
 function TdwsExecution.Random : Double;
 // Marsaglia, George (July 2003). "Xorshift RNGs". Journal of Statistical Software Vol. 8 (Issue  14).
 const
@@ -9031,7 +9036,7 @@ end;
 //
 constructor TOperatorSymbol.Create(const aTokenType : TTokenType);
 begin
-   inherited Create('operator '+cTokenStrings[aTokenType], nil);
+   inherited Create(UnifiedString('operator '+cTokenStrings[aTokenType]), nil);
    FToken:=aTokenType;
 end;
 

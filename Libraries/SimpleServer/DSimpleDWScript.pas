@@ -36,7 +36,8 @@ uses
    dwsJSFilter, dwsJSLibModule, dwsCodeGen,
    dwsWebEnvironment, dwsSystemInfoLibModule, dwsCPUUsage, dwsWebLibModule,
    dwsWebServerHelpers, dwsZipLibModule, dwsIniFileModule,
-   dwsDataBase, dwsDataBaseLibModule, dwsWebServerInfo, dwsWebServerLibModule,
+   dwsDataBase, dwsDataBaseLibModule, dwsSQLiteLibModule, dwsTabularLibModule,
+   dwsWebServerInfo, dwsWebServerLibModule,
    dwsBackgroundWorkersLibModule, dwsSynapseLibModule, dwsCryptoLibModule,
    dwsEncodingLibModule, dwsComConnector, dwsXXHash, dwsHTTPSysServer,
    dwsBigIntegerFunctions.GMP, dwsMPIR.Bundle, dwsTurboJPEG.Bundle,
@@ -100,6 +101,8 @@ type
       FHotPath : String;
       FWebLib : TdwsWebLib;
       FDataBase : TdwsDatabaseLib;
+      FSQLite : TdwsSQLiteLib;
+      FTabular : TdwsTabularLib;
       FJSON : TdwsJSONLibModule;
       FSynapse : TdwsSynapseLib;
       FWebServerLib : TdwsWebServerLib;
@@ -308,8 +311,14 @@ begin
    FSystemInfo.Script:=DelphiWebScript;
 
    FDataBase := TdwsDatabaseLib.Create(Self);
-   FDataBase.dwsDatabase.Script := DelphiWebScript;
+   FDataBase.Script := DelphiWebScript;
    TdwsDataBase.OnApplyPathVariables := ApplyPathVariables;
+
+   FSQLite := TdwsSQLiteLib.Create(Self);
+   FSQLite.Script := DelphiWebScript;
+
+   FTabular := TdwsTabularLib.Create(Self);
+   FTabular.dwsTabular.Script := DelphiWebScript;
 
    FWebLib:=TdwsWebLib.Create(Self);
    FWebLib.dwsWeb.Script:=DelphiWebScript;

@@ -61,6 +61,7 @@ const
   SYS_ARRAY_OF_STRING = 'array of String';
   SYS_ARRAY_OF_INTEGER = 'array of Integer';
   SYS_ARRAY_OF_FLOAT = 'array of Float';
+  SYS_ARRAY_OF_VARIANT = 'array of Variant';
 
   SYS_COMPILER_VERSION = 'CompilerVersion';
 
@@ -188,6 +189,7 @@ const
   CPE_ClassOperatorRedefined = 'Class operator already defined for type "%s"';
   CPE_ClassVarRedefined = 'There is already a class variable with name "%s"';
   CPE_ClassConstRedefined = 'There is already a class const with name "%s"';
+  CPE_SymbolRedefined = 'There is already a symbol with name "%s"';
   CPE_ImplClassNameExpected = 'Class name expected';
   CPE_ImplInvalidClass = '"%s" is not a method of class "%s"';
   CPE_ImplAbstract = '"%s.%s" is declared "abstract", no implementation allowed';
@@ -418,6 +420,7 @@ const
   CPE_TypeCouldNotBeInferenced = 'Type could not be inferenced';
   CPE_RangeTooLarge = 'Range is too large';
   CPE_InvalidIntegerFormat = '"%s" is not a valid integer value';
+  CPE_InvalidIntegerBaseFormat = '"%s" is not a valid 64bit integer value in base %d';
   CPE_InvalidFloatFormat = '"%s" is not a valid floating point value';
 
   CPE_LocalFunctionAsDelegate = 'Local procedure/function cannot be used as delegate';

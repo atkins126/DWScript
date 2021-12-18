@@ -67,6 +67,7 @@ type
          procedure UnitNamesSuggest;
          procedure OverloadSuggest;
          procedure LengthDotSuggest;
+         procedure DefaultPropertySuggest;
          procedure PropertyDescription;
          procedure ImplementationSuggest;
          procedure ParameterSuggest;
@@ -479,10 +480,10 @@ end;
 //
 procedure TSourceUtilsTests.HelperSuggestTest;
 const
-   cSugg : array [0..19] of String = (
+   cSugg : array [0..20] of String = (
       'Abs', 'Clamp', 'Compare', 'Compare', 'Factorial', 'Hello', 'IsOdd', 'IsPrime',
       'LeastFactor', 'Max', 'Min', 'Next', 'PopCount', 'Sign', 'Sqr', 'TestBit',
-      'ToBin', 'ToHexString', 'ToString', 'Unsigned32'
+      'ToBin', 'ToHexString', 'ToString', 'ToString', 'Unsigned32'
       );
 
 var
@@ -1030,8 +1031,43 @@ begin
    scriptPos := TScriptPos.Create(prog.SourceList[0].SourceFile, 2, 21);
 
    sugg := TdwsSuggestions.Create(prog, scriptPos);
-   CheckEquals(1, sugg.Count);
+   CheckEquals(2, sugg.Count);
    CheckEquals('ToString () : String', sugg.Caption[0]);
+   CheckEquals('ToString (base: Integer) : String', sugg.Caption[1]);
+end;
+
+// DefaultPropertySuggest
+//
+procedure TSourceUtilsTests.DefaultPropertySuggest;
+var
+   prog : IdwsProgram;
+   sugg : IdwsSuggestions;
+   scriptPos : TScriptPos;
+begin
+   prog := FCompiler.Compile( 'type TTest = class'#10
+                             +'   F : array of String;'#10
+                             +'   property Prop[i : Integer] : String read (F[i]); default;'#10
+                             +'end;'#10
+                             +'var t : TTest;'#10
+                             +'PrintLn(t[0].ToU');
+
+   scriptPos := TScriptPos.Create(prog.SourceList[0].SourceFile, 6, 17);
+
+   sugg := TdwsSuggestions.Create(prog, scriptPos);
+   CheckEquals(1, sugg.Count);
+   CheckEquals('ToUpper () : String', sugg.Caption[0]);
+
+   prog := FCompiler.Compile( 'type TTest = class'#10
+                             +'   class function Get(i : Integer) : String;'#10
+                             +'   property Prop[i : Integer] : String read Get; default;'#10
+                             +'end;'#10
+                             +'PrintLn(TTest[0].ToL');
+
+   scriptPos := TScriptPos.Create(prog.SourceList[0].SourceFile, 5, 21);
+
+   sugg := TdwsSuggestions.Create(prog, scriptPos);
+   CheckEquals(1, sugg.Count);
+   CheckEquals('ToLower () : String', sugg.Caption[0]);
 end;
 
 // PropertyDescription
@@ -1133,12 +1169,14 @@ end;
 procedure TSourceUtilsTests.FunctionCaptionDescription;
 var
    prog : IdwsProgram;
+   symClassFn : TSymbol;
 begin
    prog := FCompiler.Compile(
           'function  Test1(a, b : Integer; const c : String; var d : Boolean; e : type Boolean) : String; begin end;'#10
          +'function  Test2(const a, b : String; c : String; var d : Boolean; var e : Boolean) : String; begin end;'#10
          +'procedure Test3(a, b : Integer; c : type Integer; d : Boolean; var e : Boolean); begin end;'#10
          +'procedure Test4(var a, b : Integer; const c : Integer; d : Boolean; e : Boolean); begin end;'#10
+         +'type TTest = class class function TestFC(a : array of TTest) : array of String; empty; end;'#10
    );
    CheckFalse(prog.Msgs.HasErrors, prog.Msgs.AsInfo);
 
@@ -1150,6 +1188,12 @@ begin
                prog.Table.FindSymbol('Test3', cvMagic).Description, 'Test3');
    CheckEquals('procedure Test4(var a: Integer; var b: Integer; const c: Integer; d: Boolean; e: Boolean)',
                prog.Table.FindSymbol('Test4', cvMagic).Description, 'Test4');
+
+   symClassFn := (prog.Table.FindLocal('TTest') as TClassSymbol).Members.FindSymbol('TestFC', cvMagic);
+   CheckEquals('class function TestFC(array of TTest): array of String',
+               symClassFn.Caption, 'TestFC');
+   CheckEquals('class function TestFC(a: array of TTest): array of String',
+               symClassFn.Description, 'TestFC');
 end;
 
 // SuggestInBlockWithError

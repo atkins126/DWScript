@@ -365,6 +365,19 @@ function FileDateTime(const name : TFileName; lastAccess : Boolean = False) : Td
 procedure FileSetDateTime(hFile : THandle; const aDateTime : TdwsDateTime);
 function DeleteDirectory(const path : String) : Boolean;
 
+type
+   TdwsMemoryMappedFile = record
+      FileHandle : THandle;
+      MapHandle : THandle;
+      Base : Pointer;
+      Size : Int64;
+
+      function DetectEncoding(var encoding : TEncoding) : Integer;
+   end;
+
+function FileMemoryMapReadOnly(const fileName : TFileName) : TdwsMemoryMappedFile;
+procedure FileUnMap(var map : TdwsMemoryMappedFile);
+
 function DirectSet8087CW(newValue : Word) : Word; register;
 function DirectSetMXCSR(newValue : Word) : Word; register;
 
@@ -424,6 +437,8 @@ function GetModuleVersion(instance : THandle; var version : TModuleVersion) : Bo
 function GetApplicationVersion(var version : TModuleVersion) : Boolean;
 function ApplicationVersion : String;
 
+function Win64AVX2Supported : Boolean;
+
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -431,6 +446,90 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
+
+// FileMemoryMapReadOnly
+//
+function FileMemoryMapReadOnly(const fileName : TFileName) : TdwsMemoryMappedFile;
+begin
+   Result.Size := 0;
+   Result.Base := nil;
+   Result.MapHandle := 0;
+   Result.FileHandle := FileOpen(fileName, fmOpenRead+fmShareDenyNone);
+   if Result.FileHandle = INVALID_HANDLE_VALUE then begin
+      Result.FileHandle := 0;
+      RaiseLastOSError;
+   end;
+   try
+      if not GetFileSizeEx(Result.FileHandle, Result.Size) then
+         RaiseLastOSError;
+      if Result.Size > 0 then begin
+         Result.MapHandle := CreateFileMapping(Result.FileHandle, nil, PAGE_READONLY, 0, 0, nil);
+         if Result.MapHandle = 0 then
+            RaiseLastOSError;
+         try
+            Result.Base := MapViewOfFile(Result.MapHandle, FILE_MAP_READ, 0, 0, Result.Size);
+            if Result.Base = nil then
+               RaiseLastOSError;
+         except
+            CloseHandle(Result.MapHandle);
+            Result.MapHandle := 0;
+            raise;
+         end;
+      end;
+   except
+      FileClose(Result.FileHandle);
+      Result.FileHandle := 0;
+      raise;
+   end;
+end;
+
+// FileUnMap
+//
+procedure FileUnMap(var map : TdwsMemoryMappedFile);
+begin
+   if map.Base <> nil then begin
+      UnmapViewOfFile(map.Base);
+      map.Base := nil;
+   end;
+   if map.MapHandle <> 0 then begin
+      CloseHandle(map.MapHandle);
+      map.MapHandle := 0;
+   end;
+   if map.FileHandle <> 0 then begin
+      FileClose(map.FileHandle);
+      map.FileHandle := 0;
+   end;
+end;
+
+// DetectEncoding
+//
+function TdwsMemoryMappedFile.DetectEncoding(var encoding : TEncoding) : Integer;
+
+   function DetectComplexEncoding(var encoding : TEncoding) : Integer;
+   var
+      buf : TBytes;
+      n : Integer;
+   begin
+      n := Size;
+      if n > 64 then
+         n := 64;
+      SetLength(buf, n);
+      System.Move(Base^, buf[0], n);
+      Result := TEncoding.GetBufferEncoding(buf, encoding);
+   end;
+
+begin
+   if (Size <= 0) or (Base = nil) then Exit(0);
+
+   // shortcut for UTF-8 BOM
+   if Size >= 3 then begin
+      if (PWord(Base)^ = $BBEF) and (PAnsiChar(Base)[2] = #$00BF) then begin
+         encoding := TEncoding.UTF8;
+         Exit(3);
+      end;
+   end;
+   Result := DetectComplexEncoding(encoding);
+end;
 
 {$ifdef FPC}
 type
@@ -596,8 +695,8 @@ end;
 //
 procedure SystemSleep(msec : Integer);
 begin
-   if msec>=0 then
-      Windows.Sleep(msec);
+   if msec >= 0 then
+      Sleep(msec);
 end;
 
 // FirstWideCharOfString
@@ -896,7 +995,7 @@ begin
    {$ifdef WINDOWS}
    Result := Windows.InterlockedDecrement(val);
    {$else}
-   Result := TInterlocked.Dencrement(val);
+   Result := TInterlocked.Decrement(val);
    {$endif}
 {$else}
 asm
@@ -1581,11 +1680,11 @@ begin
    if buf=nil then
       Result:=''
    else begin
-      encoding:=nil;
-      n:=TEncoding.GetBufferEncoding(buf, encoding);
-      if n=0 then
-         encoding:=TEncoding.UTF8;
-      if encoding=TEncoding.UTF8 then begin
+      encoding := nil;
+      n := TEncoding.GetBufferEncoding(buf, encoding);
+      if n = 0 then
+         encoding := TEncoding.UTF8;
+      if encoding = TEncoding.UTF8 then begin
          // handle UTF-8 directly, encoding.GetString returns an empty string
          // whenever a non-utf-8 character is detected, the implementation below
          // will return a '?' for non-utf8 characters instead
@@ -1807,19 +1906,21 @@ const
    INVALID_FILE_SIZE = DWORD($FFFFFFFF);
 var
    hFile : THandle;
-   n, i, nRead : Cardinal;
+   n : Int64;
+   i, nRead : Cardinal;
    pDest : PWord;
    buffer : array [0..16383] of Byte;
 begin
-   if fileName='' then Exit;
-   hFile:=OpenFileForSequentialReadOnly(fileName);
-   if hFile=INVALID_HANDLE_VALUE then Exit;
+   if fileName = '' then Exit;
+   hFile := OpenFileForSequentialReadOnly(fileName);
+   if hFile = INVALID_HANDLE_VALUE then Exit;
    try
-      n:=GetFileSize(hFile, nil);
-      if n=INVALID_FILE_SIZE then
+      if not GetFileSizeEx(hFile, n) then
          RaiseLastOSError;
-      if n>0 then begin
+      if n > 0 then begin
          SetLength(Result, n);
+         if Length(Result) <> n then
+            raise Exception.CreateFmt('File too large (%d)', [ n ]);
          pDest := Pointer(Result);
          repeat
             if n > SizeOf(Buffer) then
@@ -2323,6 +2424,49 @@ begin
    {$endif}
 end;
 
+// Win64AVX2Supported
+//
+{$if Defined(WIN64_ASM)}
+function TestAVX2supported: boolean;
+asm
+   mov   r10, rbx
+   //Check CPUID.0
+   xor   eax, eax
+   cpuid //modifies EAX,EBX,ECX,EDX
+   cmp   al, 7 // do we have a CPUID leaf 7 ?
+   jge   @@leaf7
+
+   xor   eax, eax
+   jmp   @@exit
+
+@@leaf7:
+   mov   eax, 7h
+   xor   ecx, ecx
+   cpuid
+   bt    ebx, 5 //AVX2: CPUID.(EAX=07H, ECX=0H):EBX.AVX2[bit 5]=1
+   setc  al
+
+@@exit:
+   mov   rbx, r10
+end;
+var
+   vWin64AVX2Supported : ShortInt = 0;
+function Win64AVX2Supported : Boolean;
+begin
+   if vWin64AVX2Supported = 0 then begin
+      if TestAVX2supported then
+         vWin64AVX2Supported := 1
+      else vWin64AVX2Supported := -1;
+   end;
+   Result := (vWin64AVX2Supported = 1);
+end;
+{$else}
+function Win64AVX2Supported : Boolean;
+begin
+   Result := False;
+end;
+{$endif}
+
 // ------------------
 // ------------------ TdwsCriticalSection ------------------
 // ------------------
@@ -2675,7 +2819,7 @@ begin
 end;
 {$else}
 begin
-   Result.AsLocalDateTime := Now;
+   Result.AsLocalDateTime := SysUtils.Now;
 end;
 {$endif}
 

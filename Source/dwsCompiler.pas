@@ -742,7 +742,8 @@ type
                                 const scriptPos: TScriptPos; options : TCreateFunctionOptions) : TFuncExprBase;
 
          procedure MemberSymbolWithNameAlreadyExists(sym : TSymbol; const hotPos : TScriptPos);
-         procedure IncompatibleTypes(const scriptPos : TScriptPos; const fmt : String; typ1, typ2 : TTypeSymbol);
+         procedure IncompatibleTypes(const scriptPos : TScriptPos; const fmt : String; typ1, typ2 : TTypeSymbol); overload;
+         procedure IncompatibleTypes(const scriptPos : TScriptPos; const fmt : String; typ1 : TTypeSymbol; expr2 : TTypedExpr); overload;
          procedure IncompatibleTypesWarn(const scriptPos : TScriptPos; const fmt : String; typ1, typ2 : TTypeSymbol);
          procedure ReportImplicitMethodOverload(const scriptPos : TScriptPos; const name : String;
                                                 const aLevel : TdwsHintsLevel = hlNormal);
@@ -1086,7 +1087,7 @@ function TStandardSymbolFactory.ReadInitExpr(expecting : TTypeSymbol = nil) : TT
    function ReadConstRecordInitExpr(recSym : TRecordSymbol) : TTypedExpr;
    begin
       // isolate because of the temporary dynamic array
-      Result := TConstExpr.Create(expecting, FCompiler.ReadConstRecord(recSym), 0);
+      Result := TConstExpr.Create(cNullPos, expecting, FCompiler.ReadConstRecord(recSym), 0);
    end;
 
 begin
@@ -1325,7 +1326,7 @@ function TdwsCompiler.CreateTypedDefault(typ : TTypeSymbol) : TConstExpr;
    begin
       SetLength(data, typ.Size);
       typ.InitData(data, 0);
-      Result := TConstExpr.Create(typ, data, 0);
+      Result := TConstExpr.Create(cNullPos, typ, data, 0);
    end;
 
 begin
@@ -1451,10 +1452,11 @@ begin
       msgFmt:=CPE_ClassVarRedefined
    else if sym is TConstSymbol then
       msgFmt:=CPE_ClassConstRedefined
-   else begin
-      Assert(sym is TMethodSymbol);
+   else if sym is TMethodSymbol then begin
       msgFmt := CPE_MethodRedefined;
       TMethodSymbol(sym).IgnoreMissingImplementation := True;
+   end else begin
+      msgFmt := CPE_NameAlreadyExists
    end;
    FMsgs.AddCompilerErrorFmt(hotPos, msgFmt, [sym.Name])
 end;
@@ -1465,6 +1467,15 @@ procedure TdwsCompiler.IncompatibleTypes(const scriptPos : TScriptPos;
                                          const fmt : String; typ1, typ2 : TTypeSymbol);
 begin
    FMsgs.AddCompilerErrorFmt(scriptPos, fmt, [typ1.Caption, typ2.Caption]);
+end;
+
+// IncompatibleTypes
+//
+procedure TdwsCompiler.IncompatibleTypes(const scriptPos : TScriptPos; const fmt : String; typ1 : TTypeSymbol; expr2 : TTypedExpr);
+begin
+   if expr2 is TFuncSimpleExpr then
+      FMsgs.AddCompilerErrorFmt(scriptPos, fmt, [typ1.Caption, TFuncSimpleExpr(expr2).FuncSym.Caption])
+   else IncompatibleTypes(scriptPos, fmt, typ1, expr2.Typ);
 end;
 
 // IncompatibleTypesWarn
@@ -1514,7 +1525,7 @@ begin
 
    FOnGetDefaultLocalizer := conf.DoGetLocalizer;
 
-   FDataSymbolExprReuse := TSimpleObjectObjectHash_TDataSymbol_TVarExpr.Create;
+   FDataSymbolExprReuse := nil; /// disabled for now TSimpleObjectObjectHash_TDataSymbol_TVarExpr.Create;
 
    FDefaultConditionals := TAutoStrings.CreateClone(conf.Conditionals);
    FDefaultConditionals.Value.Duplicates := dupIgnore;
@@ -1555,9 +1566,11 @@ begin
 
    FPendingAttributes.Clear;
 
-   FDataSymbolExprReuse.CleanValues;
-   FDataSymbolExprReuse.Free;
-   FDataSymbolExprReuse:=nil;
+   if FDataSymbolExprReuse <> nil then begin
+      FDataSymbolExprReuse.CleanValues;
+      FDataSymbolExprReuse.Free;
+      FDataSymbolExprReuse:=nil;
+   end;
 
    FIsExcept:=False;
 
@@ -2885,7 +2898,7 @@ begin
             SetLength(initData, sym.Typ.Size);
             sym.Typ.InitData(initData, 0);
 
-            constExpr := TConstExpr.Create(sym.Typ, initData, 0);
+            constExpr := TConstExpr.Create(scriptPos, sym.Typ, initData, 0);
             assignExpr := TAssignConstDataToVarExpr.Create(FCompilerContext, scriptPos, varExpr, constExpr);
          end;
          CurrentProg.InitExpr.AddStatement(assignExpr);
@@ -4164,17 +4177,36 @@ type
    TFindOverloadedFunc = class
       OpSymbol : TOperatorSymbol;
       CapturableUsesSym : TFuncSymbol;
-      function Callback(symbol : TSymbol) : Boolean;
+      function Callback1(symbol : TSymbol) : Boolean;
+      function Callback2(symbol : TSymbol) : Boolean;
    end;
 
-function TFindOverloadedFunc.Callback(symbol : TSymbol) : Boolean;
+function TFindOverloadedFunc.Callback1(symbol : TSymbol) : Boolean;
 var
    funcSym : TFuncSymbol;
 begin
    Result:=False;
    funcSym:=symbol.AsFuncSymbol;
    if (funcSym<>nil) and (not symbol.IsType) then begin
-      if     (funcSym.Params.Count=2) and (funcSym.Typ<>nil)
+      if     (funcSym.Params.Count = 1) and (funcSym.Typ<>nil)
+         and (Length(opSymbol.Params) = 1)
+         and funcSym.Typ.IsOfType(opSymbol.Typ)
+         and funcSym.Params[0].Typ.IsOfType(opSymbol.Params[0]) then begin
+         CapturableUsesSym:=funcSym;
+         Result:=True;
+      end;
+   end;
+end;
+
+function TFindOverloadedFunc.Callback2(symbol : TSymbol) : Boolean;
+var
+   funcSym : TFuncSymbol;
+begin
+   Result:=False;
+   funcSym:=symbol.AsFuncSymbol;
+   if (funcSym<>nil) and (not symbol.IsType) then begin
+      if     (funcSym.Params.Count = 2) and (funcSym.Typ<>nil)
+         and (Length(opSymbol.Params) = 2)
          and funcSym.Typ.IsOfType(opSymbol.Typ)
          and funcSym.Params[0].Typ.IsOfType(opSymbol.Params[0])
          and funcSym.Params[1].Typ.IsOfType(opSymbol.Params[1]) then begin
@@ -4189,15 +4221,21 @@ end;
 function TdwsCompiler.ReadOperatorDecl : TOperatorSymbol;
 
    procedure FindOverloadedFunc(var usesSym : TFuncSymbol; const usesName : String;
-                                fromTable : TSymbolTable; opSymbol : TOperatorSymbol);
+                                fromTable : TSymbolTable; opSymbol : TOperatorSymbol;
+                                nbParams : Integer);
    var
       finder : TFindOverloadedFunc;
    begin
-      finder:=TFindOverloadedFunc.Create;
+      finder := TFindOverloadedFunc.Create;
       try
          finder.CapturableUsesSym:=usesSym;
          finder.OpSymbol:=opSymbol;
-         fromTable.EnumerateSymbolsOfNameInScope(usesName, finder.Callback);
+         case nbParams of
+            1 : fromTable.EnumerateSymbolsOfNameInScope(usesName, finder.Callback1);
+            2 : fromTable.EnumerateSymbolsOfNameInScope(usesName, finder.Callback2);
+         else
+            Assert(False);
+         end;
          usesSym:=finder.CapturableUsesSym;
       finally
          finder.Free;
@@ -4282,7 +4320,7 @@ begin
       if usesSym<>nil then begin
 
          if usesSym.IsOverloaded then
-            FindOverloadedFunc(usesSym, usesName, fromTable, Result);
+            FindOverloadedFunc(usesSym, usesName, fromTable, Result, expectedNbParams);
 
          RecordSymbolUse(usesSym, usesPos, [suReference]);
 
@@ -4656,7 +4694,7 @@ begin
 
          RecordSymbolUseReference(sym, FTok.HotPos, isWrite);
 
-         varExpr:=TVarExpr.CreateTyped(FCompilerContext, methSym.SelfSym);
+         varExpr:=TVarExpr.CreateTyped(FCompilerContext, FTok.HotPos, methSym.SelfSym);
          try
             Result:=ReadPropertyExpr(varExpr, TPropertySymbol(sym), IsWrite);
          except
@@ -5002,12 +5040,12 @@ begin
       end;
       if elem=nil then begin
          if UnicodeSameText(name, 'low') then
-            Result := TConstIntExpr.Create(enumSym, enumSym.LowBound)
+            Result := TConstIntExpr.Create(elemPos, enumSym, enumSym.LowBound)
          else if UnicodeSameText(name, 'high') then
-            Result := TConstIntExpr.Create(enumSym, enumSym.HighBound)
+            Result := TConstIntExpr.Create(elemPos, enumSym, enumSym.HighBound)
          else begin
             FMsgs.AddCompilerErrorFmt(elemPos, CPE_UnknownNameDotName, [enumSym.Name, name]);
-            Result := TConstIntExpr.Create(enumSym, 0);
+            Result := TConstIntExpr.Create(elemPos, enumSym, 0);
          end;
       end else begin
          RecordSymbolUseReference(elem, elemPos, False);
@@ -5065,7 +5103,7 @@ begin
 
    end else begin
 
-      constExpr:=TConstExpr.Create(baseType.MetaSymbol, Int64(baseType));
+      constExpr := TConstExpr.Create(FTok.HotPos, baseType.MetaSymbol, Int64(baseType));
       Result:=ReadSymbol(constExpr, IsWrite, expecting);
 
    end;
@@ -5077,8 +5115,8 @@ function TdwsCompiler.ReadInterfaceSymbolName(baseType : TInterfaceSymbol; isWri
 var
    constExpr : TTypedExpr;
 begin
-   constExpr:=TConstExpr.Create(baseType, Int64(baseType));
-   Result:=ReadSymbol(constExpr, IsWrite, expecting);
+   constExpr := TConstExpr.Create(cNullPos, baseType, Int64(baseType));
+   Result := ReadSymbol(constExpr, IsWrite, expecting);
 end;
 
 // ReadRecordSymbolName
@@ -5087,7 +5125,7 @@ function TdwsCompiler.ReadRecordSymbolName(baseType : TRecordSymbol; isWrite : B
 var
    constExpr : TTypedExpr;
 begin
-   constExpr:=TConstExpr.Create(baseType.MetaSymbol, Int64(baseType));
+   constExpr := TConstExpr.Create(cNullPos, baseType.MetaSymbol, Int64(baseType));
    Result:=ReadSymbol(constExpr, IsWrite, expecting);
 end;
 
@@ -5133,10 +5171,12 @@ begin
               and codeExprTyp.IsOfType(expecting)
               and not FTok.Test(ttBLEFT)) then
          Result:=codeExpr
+      else if not funcSym.IsOverloaded then
+         Result := ReadFunc(funcSym, codeExpr, expecting)
       else begin
-         Assert(not funcSym.IsOverloaded);
+         FMsgs.AddCompilerStopFmt(codeExpr.ScriptPos, CPH_AmbiguousMatchingOverloadsForCall, [ funcSym.Name ]);
+         Result := codeExpr;
          // Result:=ReadFuncOverloaded(funcSym, fromTable, varExpr, expecting)
-         Result:=ReadFunc(funcSym, codeExpr, expecting);
       end;
    end else Result:=codeExpr;
 
@@ -5166,7 +5206,7 @@ begin
       FMsgs.AddCompilerError(FTok.HotPos, CPE_FunctionOrValueExpected);
       // keep going
       OrphanAndNil(oldExpr);
-      expr := TConstExpr.CreateNull(FCompilerContext.TypVariant);
+      expr := TConstExpr.CreateNull(cNullPos, FCompilerContext.TypVariant);
    end else expr := TTypedExpr(oldExpr);
 
    sym := TScriptDataSymbol.Create('old$'+IntToStr(FSourcePostConditionsIndex), expr.Typ);
@@ -5412,7 +5452,7 @@ begin
             FMsgs.AddCompilerError(aPos, CPE_InvalidInstruction);
             // fake to keep going
             OrphanAndNil(expr);
-            Result:=TConstExpr.Create(propertySym.Typ);
+            Result := TConstExpr.Create(aPos, propertySym.Typ);
 
          end;
 
@@ -6354,11 +6394,11 @@ begin
       blockExpr := EnsureLoopVarExpr(forPos, loopVarName, loopVarNamePos, loopVarExpr, enumSymbol);
 
       if enumSymbol is TEnumerationSymbol then begin
-         fromExpr := TConstIntExpr.Create(loopVarExpr.Typ, TEnumerationSymbol(enumSymbol).LowBound);
-         toExpr := TConstIntExpr.Create(loopVarExpr.Typ, TEnumerationSymbol(enumSymbol).HighBound);
+         fromExpr := TConstIntExpr.Create(loopVarNamePos, loopVarExpr.Typ, TEnumerationSymbol(enumSymbol).LowBound);
+         toExpr := TConstIntExpr.Create(loopVarNamePos, loopVarExpr.Typ, TEnumerationSymbol(enumSymbol).HighBound);
       end else begin
-         fromExpr := TConstIntExpr.Create(loopVarExpr.Typ, 0);
-         toExpr := TConstIntExpr.Create(loopVarExpr.Typ, 1);
+         fromExpr := TConstIntExpr.Create(loopVarNamePos, loopVarExpr.Typ, 0);
+         toExpr := TConstIntExpr.Create(loopVarNamePos, loopVarExpr.Typ, 1);
       end;
 
       iterVarExpr:=(loopVarExpr as TIntVarExpr);
@@ -6496,8 +6536,8 @@ begin
 
    forExpr:=TForUpwardExpr.Create(forPos);
    forExpr.DoExpr:=ifThenExpr;
-   forExpr.FromExpr:=TConstIntExpr.Create(elementTyp, setOfSymbol.MinValue);
-   forExpr.ToExpr:=TConstIntExpr.Create(elementTyp, setOfSymbol.MaxValue);
+   forExpr.FromExpr:=TConstIntExpr.Create(inExpr.ScriptPos, elementTyp, setOfSymbol.MinValue);
+   forExpr.ToExpr:=TConstIntExpr.Create(inExpr.ScriptPos, elementTyp, setOfSymbol.MaxValue);
    forExpr.VarExpr:=(loopVarExpr as TIntVarExpr);
 
    if blockExpr<>nil then begin
@@ -6906,7 +6946,7 @@ begin
       else if progMeth.IsStatic then begin
          structSym:=progMeth.StructSymbol;
          Result:=GetMethodExpr(methodSym,
-                               TConstExpr.Create(structSym.MetaSymbol, Int64(structSym)),
+                               TConstExpr.Create(FTok.HotPos, structSym.MetaSymbol, Int64(structSym)),
                                rkClassOfRef, FTok.HotPos, options);
       end else if progMeth.SelfSym is TConstByRefParamSymbol then begin
          Result:=GetMethodExpr(methodSym,
@@ -6922,7 +6962,7 @@ begin
    end else begin
       structSym:=methodSym.StructSymbol;
       Result:=GetMethodExpr(methodSym,
-                            TConstExpr.Create(structSym.MetaSymbol, Int64(structSym)),
+                            TConstExpr.Create(FTok.HotPos, structSym.MetaSymbol, Int64(structSym)),
                             rkClassOfRef, FTok.HotPos, [cfoForceStatic]);
    end;
 
@@ -7639,8 +7679,8 @@ begin
 
                   enumSymbol:=TEnumerationSymbol(TTypeReferenceExpr(lowBound).Typ);
 
-                  min.Insert0(TConstIntExpr.Create(enumSymbol, enumSymbol.LowBound));
-                  max.Insert0(TConstIntExpr.Create(enumSymbol, enumSymbol.HighBound));
+                  min.Insert0(TConstIntExpr.Create(hotPos, enumSymbol, enumSymbol.LowBound));
+                  max.Insert0(TConstIntExpr.Create(hotPos, enumSymbol, enumSymbol.HighBound));
 
                end else if (min.Count=0) and FTok.TestDelete(ttARIGHT) then begin
 
@@ -8174,7 +8214,7 @@ begin
                      argList.Clear;
                   end else begin
                      IncompatibleTypes(argPosArray[0], CPE_IncompatibleParameterTypes,
-                                       mapFunctionType, argList[0].Typ);
+                                       mapFunctionType, argList[0]);
                      argList.OrphanItems(FCompilerContext)
                   end;
                end;
@@ -8406,8 +8446,8 @@ begin
                FMsgs.AddCompilerHint(namePos, CPH_UnnamedEnumerationElement);
                Result := FUnifiedConstants.CreateEmptyString;
             end else if meth=emName then
-               Result := TConstStringExpr.Create(FCompilerContext.TypString, element.Name)
-            else Result := TConstStringExpr.Create(FCompilerContext.TypString, element.QualifiedName);
+               Result := TConstStringExpr.Create(namePos, FCompilerContext.TypString, element.Name)
+            else Result := TConstStringExpr.Create(namePos, FCompilerContext.TypString, element.QualifiedName);
             OrphanAndNil(baseExpr);
 
          end else begin
@@ -8570,7 +8610,7 @@ begin
       end else begin
          // error was already registered, attempt to keep compiling
          classSym := FCompilerContext.TypTObject;
-         baseExpr := TBogusConstExpr.CreateNull(classSym);
+         baseExpr := TBogusConstExpr.CreateNull(hotPos, classSym);
       end;
       if not FTok.TestDelete(ttBRIGHT) then
          FMsgs.AddCompilerError(hotPos, CPE_BrackRightExpected);
@@ -8588,8 +8628,10 @@ begin
       else sym := nil;
       if sym = nil then
          sym := CurrentProg.Table.FindSymbol(nameToken.AsString, cvPrivate);
-      if sym <> nil then
-         CheckMatchingDeclarationCase(nameToken.AsString, sym, hotPos);
+
+      if sym = nil then
+         FMsgs.AddCompilerErrorFmt(hotPos, CPE_UnknownName, [ nameToken.AsString ])
+      else CheckMatchingDeclarationCase(nameToken.AsString, sym, hotPos);
 
       FTok.KillToken;
 
@@ -8606,7 +8648,8 @@ begin
 
          end else begin
 
-            FMsgs.AddCompilerError(hotPos, CPE_TypeExpected);
+            if sym <> nil then
+               FMsgs.AddCompilerError(hotPos, CPE_TypeExpected);
             Result:=ReadNewArray(FCompilerContext.TypVariant);
 
          end;
@@ -8615,7 +8658,11 @@ begin
       end else begin
 
          if sym is TAliasSymbol then
-            sym:=TAliasSymbol(sym).UnAliasedType;
+            sym := TAliasSymbol(sym).UnAliasedType
+         else if sym = nil then begin
+            // keep compiling
+            sym := FCompilerContext.TypTObject;
+         end;
 
          if sym is TClassSymbol then begin
 
@@ -8638,14 +8685,14 @@ begin
             end else FMsgs.AddCompilerStopFmt(hotPos, CPE_NotSupportedFor,
                                               [cTokenStrings[ttNEW], sym.Name]);
 
-         end else FMsgs.AddCompilerStop(hotPos, CPE_ClassRefExpected);
+         end else if sym <> nil then
+            FMsgs.AddCompilerStop(hotPos, CPE_ClassRefExpected);
 
       end;
 
       if sym is TClassSymbol then
-         baseExpr:=TConstExpr.Create(classSym.MetaSymbol, Int64(classSym))
-      else baseExpr:=TVarExpr.CreateTyped(FCompilerContext, TDataSymbol(sym));
-
+         baseExpr := TConstExpr.Create(hotPos, classSym.MetaSymbol, Int64(classSym))
+      else baseExpr := TVarExpr.CreateTyped(FCompilerContext, hotPos, TDataSymbol(sym));
    end;
 
    WarnDeprecatedType(hotPos, classSym);
@@ -8653,7 +8700,7 @@ begin
    if classSym.IsStatic then begin
       OrphanAndNil(baseExpr);
       FMsgs.AddCompilerErrorFmt(hotPos, CPE_ClassIsStaticNoInstantiation, [classSym.Name]);
-      Result:=TConstExpr.Create(classSym, 0);
+      Result:=TConstExpr.Create(cNullPos, classSym, 0);
       Exit;
    end;
    if (restrictTo<>nil) and not classSym.IsOfType(restrictTo) then
@@ -8842,7 +8889,7 @@ var
    intfTyp : TInterfaceSymbol;
    interfaces : TList;
    missingMethod : TMethodSymbol;
-   isInSymbolTable, firstVisibilityToken : Boolean;
+   isInSymbolTable, firstVisibilityToken, hasSubTypes : Boolean;
    previousClassFlags  : TClassSymbolFlags;
    visibility : TdwsVisibility;
    tt : TTokenType;
@@ -8890,6 +8937,7 @@ begin
       Exit;
    end else Result.ClearIsForwarded;
 
+   hasSubTypes := False;
    if not isInSymbolTable then
       CurrentProg.Table.AddSymbol(Result);   // auto-forward
    interfaces:=TList.Create;
@@ -9027,7 +9075,7 @@ begin
                                        ttCONSTRUCTOR, ttDESTRUCTOR, ttOPERATOR,
                                        ttCLASS, ttPROPERTY, ttCONST,
                                        ttPRIVATE, ttPROTECTED, ttPUBLIC, ttPUBLISHED,
-                                       ttALEFT]);
+                                       ttALEFT, ttTYPE]);
                case tt of
 
                   ttFUNCTION, ttPROCEDURE, ttMETHOD, ttCONSTRUCTOR, ttDESTRUCTOR :
@@ -9080,6 +9128,15 @@ begin
                   ttALEFT : begin
                      ReadAttributes(True);
                   end;
+                  ttTYPE : begin
+                     if not hasSubTypes then begin
+                        // only do this here when a subtype is explicitly requested, as full implications are still not clear
+                        hasSubTypes := True;
+                        TSymbolTable(Result.Members).AddParent(FCurrentProg.Table);
+                        FCurrentProg.EnterSubTable(Result.Members);
+                     end;
+                     ReadTypeDecl(True);
+                  end;
 
                else
 
@@ -9108,10 +9165,14 @@ begin
       except
          // Set Result to nil to prevent auto-forward removal then re-reraise
          if not isInSymbolTable then
-            Result:=nil;
+            Result := nil;
          raise;
       end;
    finally
+      if hasSubTypes then begin
+         FCurrentProg.LeaveSubTable;
+         TSymbolTable(Result.Members).RemoveParent(FCurrentProg.Table)
+      end;
       interfaces.Free;
       if not isInSymbolTable then
          CurrentProg.Table.Remove(Result);  // auto-forward
@@ -9660,7 +9721,7 @@ begin
       try
          expr:=ReadExpr(propSym.Typ);
          if expr<>nil then begin
-            resultExpr:=TVarExpr.CreateTyped(FCompilerContext, proc.Func.Result);
+            resultExpr:=TVarExpr.CreateTyped(FCompilerContext, scriptPos, proc.Func.Result);
             proc.Expr:=CreateAssign(scriptPos, ttASSIGN, resultExpr, expr);
          end;
       finally
@@ -10374,7 +10435,7 @@ begin
       if proc.Func.Result=nil then
          FMsgs.AddCompilerStop(FTok.HotPos, CPE_NoResultRequired);
       RecordSymbolUse(proc.Func.Result, exitPos, [suReference, suWrite, suImplicit]);
-      leftExpr:=TVarExpr.CreateTyped(FCompilerContext, proc.Func.Result);
+      leftExpr:=TVarExpr.CreateTyped(FCompilerContext, exitPos, proc.Func.Result);
       try
          assignExpr := ReadAssign(ttASSIGN, leftExpr);
          try
@@ -11255,7 +11316,7 @@ function TdwsCompiler.ReadTerm(isWrite : Boolean = False; expecting : TTypeSymbo
 
    function ReadNull(expecting : TTypeSymbol) : TConstExpr;
    begin
-      Result:=TConstExpr.CreateNull(expecting);
+      Result:=TConstExpr.CreateNull(cNullPos, expecting);
    end;
 
    procedure CheckForClosure(funcSym : TFuncSymbol);
@@ -11348,7 +11409,7 @@ function TdwsCompiler.ReadTerm(isWrite : Boolean = False; expecting : TTypeSymbo
             FMsgs.AddCompilerError(procPos, CPE_UnexpectedEqGtrForLambdaStatement);
             proc.Expr:=resultExpr;
          end else begin
-            resultVar:=TVarExpr.CreateTyped(FCompilerContext, proc.Func.Result);
+            resultVar:=TVarExpr.CreateTyped(FCompilerContext, procPos, proc.Func.Result);
             proc.Expr:=CreateAssign(procPos, ttASSIGN, resultVar, resultExpr);
          end;
 
@@ -11435,7 +11496,7 @@ function TdwsCompiler.ReadTerm(isWrite : Boolean = False; expecting : TTypeSymbo
 
       if Result = nil then begin
          // error was already reported
-         Result := TBogusConstExpr.Create(FCompilerContext.TypNil, cNilIntf);
+         Result := TBogusConstExpr.Create(cNullPos, FCompilerContext.TypNil, cNilIntf);
       end else if (Result.Typ=nil) or (Result.Typ.AsFuncSymbol=nil) then begin
          if (expecting = FCompilerContext.TypAnyFunc) or (Result is TConstExpr) then
             FMsgs.AddCompilerError(hotPos, CPE_UnexpectedAt)
@@ -11443,7 +11504,7 @@ function TdwsCompiler.ReadTerm(isWrite : Boolean = False; expecting : TTypeSymbo
             ReportIncompatibleAt(hotPos, Result);
          // keep compiling
          OrphanAndNil(Result);
-         Result := TBogusConstExpr.Create(FCompilerContext.TypNil, cNilIntf);
+         Result := TBogusConstExpr.Create(cNullPos, FCompilerContext.TypNil, cNilIntf);
       end;
    end;
 
@@ -12691,16 +12752,16 @@ end;
 function TdwsCompiler.GetVarExpr(const aScriptPos: TScriptPos; dataSym: TDataSymbol): TVarExpr;
 begin
    if (dataSym.ClassType=TClassVarSymbol) and (TClassVarSymbol(dataSym).OwnerSymbol.IsExternal) then
-      Result:=TExternalVarExpr.Create(dataSym)
+      Result:=TExternalVarExpr.Create(aScriptPos, dataSym)
    else if CurrentProg.Level=dataSym.Level then begin
       if FDataSymbolExprReuse<>nil then begin
          Result:=FDataSymbolExprReuse.GetValue(dataSym);
          if Result=nil then begin
-            Result:=TVarExpr.CreateTyped(FCompilerContext, dataSym);
+            Result:=TVarExpr.CreateTyped(FCompilerContext, aScriptPos, dataSym);
             FDataSymbolExprReuse.SetValue(dataSym, Result);
          end;
          Result.IncRefCount;
-      end else Result:=TVarExpr.CreateTyped(FCompilerContext, dataSym);
+      end else Result:=TVarExpr.CreateTyped(FCompilerContext, aScriptPos, dataSym);
    end else Result:=TVarParentExpr.Create(aScriptPos, dataSym);
 end;
 
@@ -12716,8 +12777,8 @@ end;
 function TdwsCompiler.GetVarParamExpr(dataSym : TVarParamSymbol): TByRefParamExpr;
 begin
   if CurrentProg.Level = dataSym.Level then
-      Result := TVarParamExpr.Create(dataSym)
-  else Result := TVarParamParentExpr.Create(dataSym)
+      Result := TVarParamExpr.Create(cNullPos, dataSym)
+  else Result := TVarParamParentExpr.Create(cNullPos,dataSym)
 end;
 
 // GetConstByRefParamExpr
@@ -12725,8 +12786,8 @@ end;
 function TdwsCompiler.GetConstByRefParamExpr(dataSym : TConstByRefParamSymbol) : TByRefParamExpr;
 begin
    if CurrentProg.Level = dataSym.Level then
-      Result := TConstParamExpr.Create(dataSym)
-   else Result := TConstParamParentExpr.Create(dataSym)
+      Result := TConstParamExpr.Create(cNullPos, dataSym)
+   else Result := TConstParamParentExpr.Create(cNullPos, dataSym)
 end;
 
 // GetConstParamExpr
@@ -13044,7 +13105,7 @@ begin
 
       Result:=TryConnectorCall;
       if Result=nil then
-         Result:=TConstExpr.CreateNull(FCompilerContext.TypVariant); // keep compiling
+         Result:=TConstExpr.CreateNull(cNullPos, FCompilerContext.TypVariant); // keep compiling
 
    end else if not isWrite then begin
 
@@ -13735,7 +13796,7 @@ function TdwsCompiler.ReadSpecialFunction(const namePos : TScriptPos; specialKin
       argTyp.InitData(data, 0);
       if argTyp is TBaseSymbol then
          Result := FCompilerContext.CreateConstExpr(argTyp, data[0])
-      else Result := TConstExpr.Create(argTyp, data);
+      else Result := TConstExpr.Create(namePos, argTyp, data);
    end;
 
 var
@@ -13834,7 +13895,7 @@ begin
                Result:=CreateArrayHigh(namePos, argExpr, TArraySymbol(argTyp), True);
             end else if argTyp is TEnumerationSymbol then begin
                OrphanAndNil(argExpr);
-               Result := TConstIntExpr.Create(argTyp, TEnumerationSymbol(argTyp).HighBound)
+               Result := TConstIntExpr.Create(namePos, argTyp, TEnumerationSymbol(argTyp).HighBound)
             end else if argTyp.IsOfType(FCompilerContext.TypString) and Assigned(argExpr) then begin
                Result := TStringLengthExpr.Create(FCompilerContext, namePos, argExpr);
             end else if argTyp=FCompilerContext.TypInteger then begin
@@ -13892,7 +13953,7 @@ begin
             end else begin
                OrphanAndNil(argExpr);
                if argTyp is TEnumerationSymbol then begin
-                  Result := TConstIntExpr.Create(argTyp, TEnumerationSymbol(argTyp).LowBound);
+                  Result := TConstIntExpr.Create(namePos, argTyp, TEnumerationSymbol(argTyp).LowBound);
                end else if argTyp=FCompilerContext.TypString then begin
                   Result := FUnifiedConstants.CreateInteger(1);
                end else if (argTyp=FCompilerContext.TypInteger) then begin
@@ -13925,7 +13986,7 @@ begin
                Result := CreateTypedDefault(argTyp) as TProgramExpr
             else begin
                FMsgs.AddCompilerError(argPos, CPE_TypeExpected);
-               Result := TConstExpr.CreateNull(FCompilerContext.TypVariant);
+               Result := TConstExpr.CreateNull(namePos, FCompilerContext.TypVariant);
             end;
             OrphanAndNil(argExpr);
          end;
@@ -14048,6 +14109,9 @@ var
 begin
    if not ((argExpr is TDataExpr) and TDataExpr(argExpr).IsWritable) then
       FMsgs.AddCompilerError(argPos, CPE_VariableExpected);
+
+   if coSymbolDictionary in CompilerContext.Options then
+      RecordSymbolUse(TDataExpr(argExpr).DataSymbol, argExpr.ScriptPos, [ suWrite ]);
 
    typ:=argExpr.Typ.UnAliasedType;
    if typ is TSetOfSymbol then begin
@@ -14220,7 +14284,7 @@ function TdwsCompiler.ReadTypeExpr(const namePos : TScriptPos; typeSym : TTypeSy
 
    function CreateClassSymbolExpr(typeSym : TTypeSymbol) : TConstExpr;
    begin
-      Result:=TConstExpr.Create(typeSym, Int64(TClassOfSymbol(typeSym).TypClassSymbol));
+      Result:=TConstExpr.Create(namePos, typeSym, Int64(TClassOfSymbol(typeSym).TypClassSymbol));
    end;
 
 var
@@ -14428,7 +14492,7 @@ begin
                      if expr<>nil then begin
                         if expr.Typ is TStructuredTypeSymbol then
                            expr:=TObjToClassTypeExpr.Create(FCompilerContext, namePos, expr)
-                     end else expr:=TConstExpr.Create(meta, Int64(bestHelper.ForType));
+                     end else expr:=TConstExpr.Create(namePos, meta, Int64(bestHelper.ForType));
                   end else begin
                      OrphanAndNil(expr);
                   end;
@@ -14477,7 +14541,7 @@ begin
    if progMeth<>nil then begin
       if progMeth.IsStatic then begin
          structSym:=progMeth.StructSymbol;
-         selfExpr:=TConstExpr.Create(structSym.MetaSymbol, Int64(structSym));
+         selfExpr:=TConstExpr.Create(namePos, structSym.MetaSymbol, Int64(structSym));
       end else if progMeth.SelfSym is TConstByRefParamSymbol then
          selfExpr:=GetConstParamExpr(namePos, TConstByRefParamSymbol(progMeth.SelfSym))
       else if progMeth.SelfSym=nil then
@@ -14580,6 +14644,7 @@ begin
       if sysTable.TypVariant.SupportsEmptyParam then
          sysTable.AddSymbol(TConstSymbol.CreateValue('EmptyParam', sysTable.TypVariant, EmptyParam));
       sysTable.AddSymbol(TOpenArraySymbol.Create('array of const', sysTable.TypVariant, sysTable.TypInteger));
+      sysTable.AddSymbol(TDynamicArraySymbol.Create(SYS_ARRAY_OF_VARIANT, sysTable.TypVariant, sysTable.TypInteger));
    end;
 
    sysTable.TypNil:=TNilSymbol.Create;

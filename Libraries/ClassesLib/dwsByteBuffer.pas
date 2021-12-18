@@ -48,8 +48,10 @@ type
       function Copy(offset, size : NativeInt) : IdwsByteBuffer;
 
       function DataPtr : Pointer;
+      procedure RangeCheck(index, size : Integer);
 
       function GetByteP : Byte;
+      function GetInt8P : Int8;
       function GetWordP : Word;
       function GetInt16P : Int16;
       function GetDWordP : DWord;
@@ -61,6 +63,7 @@ type
       procedure GetDataStringP(size : NativeInt; var result : String);
 
       function GetByteA(index : NativeInt) : Byte;
+      function GetInt8A(index : NativeInt) : Int8;
       function GetWordA(index : NativeInt) : Word;
       function GetInt16A(index : NativeInt) : Int16;
       function GetDWordA(index : NativeInt) : DWord;
@@ -72,6 +75,7 @@ type
       procedure GetDataStringA(index : NativeInt; size : NativeInt; var result : String);
 
       procedure SetByteP(v : Byte);
+      procedure SetInt8P(v : Int8);
       procedure SetWordP(v : Word);
       procedure SetInt16P(v : Int16);
       procedure SetDWordP(v : DWord);
@@ -83,6 +87,7 @@ type
       procedure SetDataStringP(const v : String);
 
       procedure SetByteA(index : NativeInt; v : Byte);
+      procedure SetInt8A(index : NativeInt; v : Int8);
       procedure SetWordA(index : NativeInt; v : Word);
       procedure SetInt16A(index : NativeInt; v : Int16);
       procedure SetDWordA(index : NativeInt; v : DWORD);
@@ -109,6 +114,7 @@ type
          procedure RangeCheck(index, size : Integer); inline;
 
          function GetSelf : TObject;
+         function ScriptTypeName : String;
 
          function GetCount : NativeInt;
          procedure SetCount(n : NativeInt);
@@ -141,6 +147,7 @@ type
          function DataPtr : Pointer;
 
          function GetByteP : Byte;
+         function GetInt8P : Int8;
          function GetWordP : Word;
          function GetInt16P : Int16;
          function GetDWordP : DWord;
@@ -152,6 +159,7 @@ type
          procedure GetDataStringP(size : NativeInt; var result : String);
 
          function GetByteA(index : NativeInt) : Byte;
+         function GetInt8A(index : NativeInt) : Int8;
          function GetWordA(index : NativeInt) : Word;
          function GetInt16A(index : NativeInt) : Int16;
          function GetDWordA(index : NativeInt) : DWord;
@@ -163,6 +171,7 @@ type
          procedure GetDataStringA(index : NativeInt; size : NativeInt; var result : String);
 
          procedure SetByteP(v : Byte);
+         procedure SetInt8P(v : Int8);
          procedure SetWordP(v : Word);
          procedure SetInt16P(v : Int16);
          procedure SetDWordP(v : DWord);
@@ -174,6 +183,7 @@ type
          procedure SetDataStringP(const v : String);
 
          procedure SetByteA(index : NativeInt; v : Byte);
+         procedure SetInt8A(index : NativeInt; v : Int8);
          procedure SetWordA(index : NativeInt; v : Word);
          procedure SetInt16A(index : NativeInt; v : Int16);
          procedure SetDWordA(index : NativeInt; v : DWORD);
@@ -205,6 +215,7 @@ implementation
 uses dwsEncoding;
 
 type
+   PInt8 = ^Int8;
    PInt16 = ^Int16;
    PDWord = ^DWord;
    PInt32 = ^Int32;
@@ -218,6 +229,13 @@ type
 function TdwsByteBuffer.GetSelf : TObject;
 begin
    Result := Self;
+end;
+
+// ScriptTypeName
+//
+function TdwsByteBuffer.ScriptTypeName : String;
+begin
+   Result := 'ByteBuffer';
 end;
 
 // GetCount
@@ -449,7 +467,10 @@ begin
       raise EdwsByteBuffer.CreateFmt('Offset out of range (index %d for length %d)',
                                      [offset, Count]);
 
-   if offset + size > Count then
+   if size < 0 then
+      size := NativeUInt(Count);
+
+   if NativeUInt(offset) + NativeUInt(size) > NativeUInt(Count) then
       size := Count-offset;
 
    newBuffer := TdwsByteBuffer.Create;
@@ -457,6 +478,7 @@ begin
       newBuffer.SetCount(size);
       System.Move(FData[offset], newBuffer.FData[0], size);
    end;
+   Result := newBuffer;
 end;
 
 // DataPtr
@@ -471,6 +493,14 @@ end;
 function TdwsByteBuffer.GetByteP : Byte;
 begin
    Result := GetByteA(FPosition);
+   Inc(FPosition);
+end;
+
+// GetInt8P
+//
+function TdwsByteBuffer.GetInt8P : Int8;
+begin
+   Result := GetInt8A(FPosition);
    Inc(FPosition);
 end;
 
@@ -552,6 +582,14 @@ function TdwsByteBuffer.GetByteA(index : NativeInt) : Byte;
 begin
    RangeCheck(index, 1);
    Result := FData[index];
+end;
+
+// GetInt8A
+//
+function TdwsByteBuffer.GetInt8A(index : NativeInt) : Int8;
+begin
+   RangeCheck(index, 1);
+   Result := PInt8(@FData[index])^;
 end;
 
 // GetWordA
@@ -653,6 +691,14 @@ begin
    Inc(FPosition);
 end;
 
+// SetInt8P
+//
+procedure TdwsByteBuffer.SetInt8P(v : Int8);
+begin
+   SetInt8A(FPosition, v);
+   Inc(FPosition);
+end;
+
 // SetWordP
 //
 procedure TdwsByteBuffer.SetWordP(v : Word);
@@ -731,6 +777,14 @@ procedure TdwsByteBuffer.SetByteA(index : NativeInt; v : Byte);
 begin
    RangeCheck(index, 1);
    FData[index] := v;
+end;
+
+// SetInt8A
+//
+procedure TdwsByteBuffer.SetInt8A(index : NativeInt; v : Int8);
+begin
+   RangeCheck(index, 1);
+   PInt8(@FData[index])^ := v;
 end;
 
 // SetWordA

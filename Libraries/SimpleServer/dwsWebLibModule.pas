@@ -194,9 +194,16 @@ type
       Info: TProgramInfo; ExtObject: TObject);
     function dwsWebFunctionsPingIPv4FastEval(
       const args: TExprBaseListExec): Variant;
+    procedure dwsWebClassesHttpQueryMethodsSetKeepAliveEval(Info: TProgramInfo;
+      ExtObject: TObject);
+    procedure dwsWebClassesHttpQueryMethodsGetKeepAliveEval(Info: TProgramInfo;
+      ExtObject: TObject);
+    function dwsWebFunctionsPingIPv6FastEval(
+      const args: TExprBaseListExec): Variant;
   private
     { Private declarations }
     FServer :  IWebServerInfo;
+    function GetServerEvents : IdwsHTTPServerEvents;
   public
     { Public declaration }
     property Server : IWebServerInfo read FServer write FServer;
@@ -207,6 +214,16 @@ implementation
 {$R *.dfm}
 
 uses dwsWinHTTP, dwsDynamicArrays, dwsICMP;
+
+const
+   cDefaultKeepAlive = True;
+
+function TdwsWebLib.GetServerEvents : IdwsHTTPServerEvents;
+begin
+   if (FServer = nil) or (FServer.ServerEvents = nil) then
+      raise Exception.Create('ServerEvents cannot be called from this context');
+   Result := FServer.ServerEvents
+end;
 
 // WebServerSentEventToRawData
 //
@@ -260,6 +277,15 @@ end;
 // DeflateDecompress
 //
 procedure DeflateDecompress(var data : RawByteString);
+const
+   cDeflateErrors : array [-6 .. -1] of String = (
+      'incompatible version', // Z_VERSION_ERROR (-6)
+      'buffer error',         // Z_BUF_ERROR     (-5)
+      'insufficient memory',  // Z_MEM_ERROR     (-4)
+      'data error',           // Z_DATA_ERROR    (-3)
+      'stream error',         // Z_STREAM_ERROR  (-2)
+      'file error'            // Z_ERRNO         (-1)
+   );
 var
    strm : TZStream;
    code, len : integer;
@@ -268,22 +294,32 @@ begin
    StreamInit(strm);
    strm.next_in := Pointer(data);
    strm.avail_in := Length(data);
+//   len := strm.avail_in * 3; // initial chunk size = 3x comp size
    len := (strm.avail_in*20) shr 3; // initial chunk size = comp. ratio of 60%
-   SetString(tmp,nil,len);
+   SetString(tmp, nil, len);
    strm.next_out := Pointer(tmp);
    strm.avail_out := len;
-   if inflateInit2_(strm, -MAX_WBITS, ZLIB_VERSION, SizeOf(strm))<0 then
+   if inflateInit2_(strm, -MAX_WBITS, ZLIB_VERSION, SizeOf(strm)) < 0 then
       raise Exception.Create('inflateInit2_ failed');
    try
-      repeat
-         code := Check(inflate(strm, Z_FINISH),[Z_OK,Z_STREAM_END,Z_BUF_ERROR]);
-         if strm.avail_out=0 then begin
-            // need to increase buffer by chunk
-            SetLength(tmp,length(tmp)+len);
-            strm.next_out := PAnsiChar(pointer(tmp))+length(tmp)-len;
-            strm.avail_out := len;
+      while True do begin
+         code := inflate(strm, Z_FINISH);
+         case code of
+            Z_OK : ; // continue
+            Z_STREAM_END : Break;
+            Z_BUF_ERROR :
+               if strm.avail_out = 0 then begin
+                  // need to increase buffer by chunk
+                  SetLength(tmp, Length(tmp) + len);
+                  strm.next_out := PAnsiChar(Pointer(tmp)) + Length(tmp) - len;
+                  strm.avail_out := len;
+               end else raise Exception.Create('Deflate: corrupt compressed data');
+         else
+            if (code >= Low(cDeflateErrors)) and (code <= High(cDeflateErrors)) then
+               raise Exception.CreateFmt('Deflate: %s (%d)', [ cDeflateErrors[code], code ])
+            else raise Exception.CreateFmt('Deflate: error %d', [ code ]);
          end;
-      until code=Z_STREAM_END;
+      end;
    finally
       inflateEnd(strm);
    end;
@@ -295,6 +331,7 @@ const
 
    cWinHttpCredentials : TGUID = '{FB60EB3D-1085-4A88-9923-DE895B5CAB76}';
    cWinHttpIgnoreSSLCertificateErrors : TGUID = '{42AC8563-761B-4E3D-9767-A21F8F32201C}';
+   cWinHttpKeepAlive : TGUID = '{6081C40E-EED1-4421-A7B4-15E4D1942A15}';
    cWinHttpProxyName : TGUID = '{2449F585-D6C6-4FDC-8D86-0266E01CA99C}';
    cWinHttpConnectTimeout : TGUID = '{8D322334-D1DD-4EBF-945F-193CFCA001FB}';
    cWinHttpSendTimeout : TGUID = '{1DE21769-65B5-4039-BB66-62D405FB00B7}';
@@ -314,6 +351,7 @@ var
    conn : TdwsWinHttpConnection;
    iconn : IGetSelf;
    unassignedVariant : Variant;
+   keepAlive : Boolean;
 begin
    if not uri.From(url) then
       raise Exception.CreateFmt('Invalid url "%s"', [url]);
@@ -341,15 +379,17 @@ begin
          conn.SetIgnoreSSLErrors(customStates[cWinHttpIgnoreSSLCertificateErrors]);
          conn.SetCredentials(customStates[cWinHttpCredentials]);
          conn.SetCustomHeaders(customStates[cWinHttpCustomHeaders]);
+         keepAlive := customStates.BooleanStateDef(cWinHttpKeepAlive, cDefaultKeepAlive);
       end else begin
          conn.ConnectServer(uri, '', HTTP_DEFAULT_CONNECTTIMEOUT, HTTP_DEFAULT_SENDTIMEOUT, HTTP_DEFAULT_RECEIVETIMEOUT);
          conn.SetIgnoreSSLErrors(unassignedVariant);
          conn.SetCredentials(unassignedVariant);
          conn.SetCustomHeaders(unassignedVariant);
+         keepAlive := cDefaultKeepAlive;
       end;
       conn.SetOnProgress(onProgress);
 
-      Result := conn.Request(uri, method, 0, '', requestData, requestContentType, replyHeaders, replyData);
+      Result := conn.Request(uri, method, Ord(keepAlive), '', requestData, requestContentType, replyHeaders, replyData);
    except
       on EWinHTTP do begin
          if exec <> nil then
@@ -449,6 +489,7 @@ function THttpRequestThread.GetResponseHeader(const name : String) : String;
 begin
    if FResponseHeaders = nil then
       PrepareResponseHeaders;
+   Result := FResponseHeaders.Values[name];
 end;
 
 // Execute
@@ -669,6 +710,12 @@ begin
    Info.Execution.CustomStates[cWinHttpIgnoreSSLCertificateErrors]:=Info.ParamAsBoolean[0];
 end;
 
+procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetKeepAliveEval(
+  Info: TProgramInfo; ExtObject: TObject);
+begin
+   Info.Execution.CustomStates[cWinHttpKeepAlive]:=Info.ParamAsBoolean[0];
+end;
+
 procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsGetIgnoreSSLCertificateErrorsEval(
   Info: TProgramInfo; ExtObject: TObject);
 var
@@ -680,10 +727,16 @@ begin
    Info.ResultAsBoolean:=v;
 end;
 
+procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsGetKeepAliveEval(
+  Info: TProgramInfo; ExtObject: TObject);
+begin
+   Info.ResultAsBoolean := Info.Execution.CustomStates.BooleanStateDef(cWinHttpKeepAlive, cDefaultKeepAlive);
+end;
+
 procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetProxyNameEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
-   Info.Execution.CustomStates[cWinHttpProxyName]:=Info.ParamAsString[0];
+   Info.Execution.CustomStates[cWinHttpProxyName] := Info.ParamAsString[0];
 end;
 
 procedure TdwsWebLib.dwsWebClassesWebRequestMethodsAuthenticatedUserFastEvalString(
@@ -951,7 +1004,7 @@ end;
 procedure TdwsWebLib.dwsWebClassesWebResponseMethodsSetContentFileFastEvalNoResult(
   baseExpr: TTypedExpr; const args: TExprBaseListExec);
 var
-   fileName, contenType : String;
+   fileName, contentType : String;
    wr : TWebResponse;
 begin
    wr := args.WebResponse;
@@ -959,9 +1012,9 @@ begin
       fileName := (args.Exec as TdwsProgramExecution).FileSystem.ValidateFileName(args.AsString[0]);
       if fileName = '' then
          raise Exception.Create('SetContentFile failed: file does not exists or access denied');
-      args.EvalAsString(1, contenType);
-      if contenType <> '' then
-         fileName := fileName + #0 + contenType;
+      args.EvalAsString(1, contentType);
+      if contentType <> '' then
+         fileName := fileName + #0 + contentType;
       wr.ContentData := StringToUTF8(fileName);
       wr.ContentType := HTTP_RESP_STATICFILE;
    end;
@@ -1097,7 +1150,7 @@ var
    obj : TScriptObjInstance;
 begin
    obj := Info.ScriptObj.GetSelf as TScriptObjInstance;
-   FServer.ServerEvents.PostEvent(Info.ParamAsString[0], WebServerSentEventToRawData(obj));
+   GetServerEvents.PostEvent(Info.ParamAsString[0], WebServerSentEventToRawData(obj));
 end;
 
 procedure TdwsWebLib.dwsWebClassesWebServerSentEventMethodsToRawDataEval(
@@ -1112,25 +1165,25 @@ end;
 procedure TdwsWebLib.dwsWebClassesWebServerSentEventsMethodsCloseEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
-   FServer.ServerEvents.CloseRequests(Info.ParamAsString[0]);
+   GetServerEvents.CloseRequests(Info.ParamAsString[0]);
 end;
 
 procedure TdwsWebLib.dwsWebClassesWebServerSentEventsMethodsConnectionsEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
-   Info.ResultAsStringArray := FServer.ServerEvents.SourceRequests(Info.ParamAsString[0]);
+   Info.ResultAsStringArray := GetServerEvents.SourceRequests(Info.ParamAsString[0]);
 end;
 
 procedure TdwsWebLib.dwsWebClassesWebServerSentEventsMethodsPostRawEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
-   FServer.ServerEvents.PostEvent(Info.ParamAsString[0], Info.ParamAsDataString[1]);
+   GetServerEvents.PostEvent(Info.ParamAsString[0], Info.ParamAsDataString[1]);
 end;
 
 procedure TdwsWebLib.dwsWebClassesWebServerSentEventsMethodsSourceNamesEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
-   Info.ResultAsStringArray := FServer.ServerEvents.SourceNames;
+   Info.ResultAsStringArray := GetServerEvents.SourceNames;
 end;
 
 function TdwsWebLib.dwsWebFunctionsDeflateCompressFastEval(
@@ -1151,10 +1204,18 @@ function TdwsWebLib.dwsWebFunctionsDeflateDecompressionFastEval(
   const args: TExprBaseListExec): Variant;
 var
    data : RawByteString;
+   buf : String;
 begin
-   data:=args.AsDataString[0];
-   DeflateDecompress(data);
-   Result:=RawByteStringToScriptString(data);
+   args.EvalAsString(0, buf);
+   ScriptStringToRawByteString(buf, data);
+   try
+      DeflateDecompress(data);
+   except
+      on E: Exception do
+         raise Exception.CreateFmt('Deflate %s', [ E.Message ]);
+   end;
+   RawByteStringToScriptString(data, buf);
+   VarCopySafe(Result, buf);
 end;
 
 procedure TdwsWebLib.dwsWebFunctionsGetHostByAddrEval(info: TProgramInfo);
@@ -1181,6 +1242,12 @@ function TdwsWebLib.dwsWebFunctionsPingIPv4FastEval(
   const args: TExprBaseListExec): Variant;
 begin
    Result := PingIPv4(args.AsString[0], args.AsInteger[1]);
+end;
+
+function TdwsWebLib.dwsWebFunctionsPingIPv6FastEval(
+  const args: TExprBaseListExec): Variant;
+begin
+   Result := PingIPv6(args.AsString[0], args.AsInteger[1]);
 end;
 
 procedure TdwsWebLib.dwsWebClassesHttpRequestCleanUp(ExternalObject: TObject);

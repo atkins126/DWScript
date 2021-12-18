@@ -19,7 +19,7 @@ interface
 
 uses Classes, SysUtils, Math, Variants, Types, Graphics,
    dwsXPlatformTests, dwsUtils,
-   dwsXPlatform, dwsWebUtils, dwsTokenStore, dwsCryptoXPlatform,
+   dwsXPlatform, dwsTokenStore, dwsCryptoXPlatform,
    dwsEncodingLibModule, dwsGlobalVars, dwsEncoding, dwsDataContext,
    dwsXXHash, dwsURLRewriter, dwsJSON;
 
@@ -84,9 +84,8 @@ type
 
          procedure LoadTextFromBufferTest;
 
-         procedure URLEncodedEncoder;
-
          procedure VariantClearAssignString;
+         procedure VarCompareSafeEqualityTests;
 
          procedure TokenStoreData;
          procedure MultiThreadedTokenStore;
@@ -796,13 +795,13 @@ begin
    CheckEquals('-8301034833169298228', s);
 
    n:=1;
-   for i:=1 to 20 do begin
+   for i:=1 to 18 do begin
       FastInt64ToStr(n, s);
       CheckEquals(IntToStr(n), s);
       n:=n*10;
    end;
    n:=-1;
-   for i:=1 to 20 do begin
+   for i:=1 to 18 do begin
       FastInt64ToStr(n, s);
       CheckEquals(IntToStr(n), s);
       n:=n*10;
@@ -1107,16 +1106,6 @@ begin
    CheckEquals('L'#$00E9, LoadTextFromBuffer(Buffer([$FF, $FE, 'L', 0, $E9, 0])), 'Lé');
 end;
 
-// URLEncodedEncoder
-//
-procedure TdwsUtilsTests.URLEncodedEncoder;
-begin
-   CheckEquals('', WebUtils.EncodeURLEncoded(''), 'empty');
-   CheckEquals('a', WebUtils.EncodeURLEncoded('a'), 'a');
-   CheckEquals('a%3D', WebUtils.EncodeURLEncoded('a='), 'a=');
-   CheckEquals('%3D%3D%3D%3D%3D%3D', WebUtils.EncodeURLEncoded('======'), '======');
-end;
-
 // VariantClearAssignString
 //
 procedure TdwsUtilsTests.VariantClearAssignString;
@@ -1143,6 +1132,29 @@ begin
    CheckEquals(123, v, '123');
    VarCopySafe(v, 'e');
    CheckEquals('e', v, 'e');
+end;
+
+// VarCompareSafeEqualityTests
+//
+procedure TdwsUtilsTests.VarCompareSafeEqualityTests;
+begin
+   Check(VarCompareSafe(Int64(1), '1') = vrEqual, 'int64 = int str');
+   Check(VarCompareSafe('1', Int64(1)) = vrEqual, 'int str = int64');
+   Check(VarCompareSafe(Int64(1), 1.0) = vrEqual, 'int64 = float');
+   Check(VarCompareSafe(Double(1.0), Int64(1)) = vrEqual, 'float = int64');
+   Check(VarCompareSafe(Int64(1), '1.0') = vrEqual, 'int64 = float str');
+   Check(VarCompareSafe('1.0', Int64(1)) = vrEqual, 'float str = int64');
+   Check(VarCompareSafe(Double(1.0), '1.0') = vrEqual, 'float = float str');
+   Check(VarCompareSafe('1.0', Int64(1)) = vrEqual, 'float str = float');
+
+   Check(VarCompareSafe(Int64(1), 'a') = vrNotEqual, 'int64 <> str');
+   Check(VarCompareSafe('a', Int64(1)) = vrNotEqual, 'str <> int64');
+   Check(VarCompareSafe(Double(1.0), 'a') = vrNotEqual, 'float <> str');
+   Check(VarCompareSafe('a', Double(1.0)) = vrNotEqual, 'str <> float');
+
+   Check(VarCompareSafe('a', 'a') = vrEqual, 'a = a');
+   Check(VarCompareSafe('a', 'A') = vrGreaterThan, 'a > A');
+   Check(VarCompareSafe('A', 'a') = vrLessThan, 'a < A');
 end;
 
 // MultiThreadedTokenStore
@@ -1743,13 +1755,13 @@ begin
    SetLength(buf2, cNB + 16);
    for var i := 0 to cNB-1 do begin
       for var k := 0 to i do
-         buf1[k] := k + 10 + (i and 3);
+         buf1[k] := (k + 10 + (i and 3)) and 255;
       for var k := 0 to High(buf1) do
          buf2[k] := $cd;
       WordsToBytes(PWordArray(@buf1[0]), PByteArray(@buf2[0]), i);
       CheckEquals($cd, buf2[i], 'write beyond buffer end at ' + IntToStr(i));
       for var k := 0 to i-1 do
-         CheckEquals(k + 10 + (i and 3), buf2[k]);
+         CheckEquals((k + 10 + (i and 3)) and 255, buf2[k]);
    end;
 end;
 

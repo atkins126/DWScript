@@ -158,7 +158,7 @@ type
          procedure ParseJSONNumber(initialChar : WideChar; var result : Double);
 
          // reads from [ to ]
-         procedure ParseIntegerArray(dest : TSimpleInt64List);
+         procedure ParseIntegerArray(dest : TSimpleInt64List; const nullValue : Int64 = 0);
          procedure ParseNumberArray(dest : TSimpleDoubleList);
          procedure ParseStringArray(dest : TUnicodeStringList);
    end;
@@ -489,6 +489,8 @@ type
 procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; const str : UnicodeString); overload; inline;
 procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; p : PWideChar; size : Integer); overload;
 
+function JSONStringify(const f : Double) : String;
+
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -768,10 +770,37 @@ end;
 
 // ParseIntegerArray
 //
-procedure TdwsJSONParserState.ParseIntegerArray(dest : TSimpleInt64List);
+procedure TdwsJSONParserState.ParseIntegerArray(dest : TSimpleInt64List; const nullValue : Int64 = 0);
+
+   function ParseJSONInteger(initialChar : WideChar) : Int64;
+   var
+      neg : Boolean;
+      d : Integer;
+      p : PWideChar;
+   begin
+      neg := (initialChar = '-');
+      // branchless "Result := if not neg then initialDigit else 0"
+      Result := (Ord(neg)-1) and (Ord(initialChar) - Ord('0'));
+      p := Ptr;
+      while True do begin
+         d := Ord(p^) - Ord('0');
+         if Cardinal(d) <= 9 then begin
+            Result := Result*10 + d;
+            Inc(p);
+            if Result < 0 then
+               raise EdwsJSONParseError.Create('Integer overflow');
+         end else begin
+            Ptr := p;
+            TrailCharacter := NeedChar;
+            Break;
+         end;
+      end;
+      if neg then
+         Result := -Result;
+   end;
+
 var
    c : WideChar;
-   num : Double;
 begin
    c:=SkipBlanks(' ');
    if c<>'[' then
@@ -782,20 +811,34 @@ begin
    repeat
       case c of
          '0'..'9', '-' : begin
-            ParseJSONNumber(c, num);
-            dest.Add(Round(num));
+            dest.Add(ParseJSONInteger(c));
+         end;
+         'n' : begin
+            if (NeedChar = 'u') and (NeedChar = 'l') and (NeedChar = 'l') then
+               dest.Add(nullValue)
+            else raise EdwsJSONParseError.Create('Unexpected character after "n"');
+            TrailCharacter := NeedChar;
          end;
       else
          raise EdwsJSONParseError.CreateFmt('Unexpected character U+%.04x', [Ord(c)]);
       end;
-      c:=SkipBlanks(TrailCharacter);
-      case c of
-         ',' : ;
-         ']' : break;
-      else
-         raise EdwsJSONParseError.CreateFmt('"," expected but U+%.04x encountered', [Ord(c)]);
+      if TrailCharacter <> ',' then begin
+         c := SkipBlanks(TrailCharacter);
+         case c of
+            ',' : ;
+            ']' : break;
+         else
+            raise EdwsJSONParseError.CreateFmt('"," expected but U+%.04x encountered', [Ord(c)]);
+         end;
       end;
-      c:=SkipBlanks(NeedChar)
+      case Ptr^ of
+         '0'..'9' : begin
+            c := Ptr^;
+            Inc(Ptr);
+         end;
+      else
+         c:=SkipBlanks(NeedChar)
+      end;
    until False;
 end;
 
@@ -868,6 +911,13 @@ end;
 procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; const str : UnicodeString);
 begin
    WriteJavaScriptString(destStream, PWideChar(Pointer(str)), Length(str));
+end;
+
+// JSONStringify
+//
+function JSONStringify(const f : Double) : String;
+begin
+   FastFloatToStr(f, Result, vJSONFormatSettings);
 end;
 
 // WriteJavaScriptString
@@ -1198,12 +1248,23 @@ end;
 // GetValue
 //
 function TdwsJSONValue.GetValue(const index : Variant) : TdwsJSONValue;
+
+   function Fallback : TdwsJSONValue;
+   begin
+      if VariantIsOrdinal(index) then
+         Result := Elements[index]
+      else Result := Items[index];
+   end;
+
 begin
    if Assigned(Self) then begin
-      if VariantIsOrdinal(index) then
-         Result:=Elements[index]
-      else Result:=Items[index];
-   end else Result:=nil;
+      case VarType(index) of
+         varInt64 : Result := Elements[TVarData(index).VInt64];
+         varUString : Result := Items[String(TVarData(index).VUString)];
+      else
+         Result := Fallback;
+      end;
+   end else Result := nil;
 end;
 
 // SetValue
@@ -2814,9 +2875,13 @@ var
    nExt : Extended;
 begin
    BeforeWriteImmediate;
-   nExt := n;
-   nc := FloatToText(buffer, nExt, fvExtended, ffGeneral, 15, 0, vJSONFormatSettings);
-   FStream.Write(buffer, nc*SizeOf(WideChar));
+   if n = 0 then
+      FStream.WriteString('0')
+   else begin
+      nExt := n;
+      nc := FloatToText(buffer, nExt, fvExtended, ffGeneral, 15, 0, vJSONFormatSettings);
+      FStream.Write(buffer, nc*SizeOf(WideChar));
+   end;
    AfterWriteImmediate;
 end;
 

@@ -116,6 +116,10 @@ type
       function DoEvalAsInteger(const args : TExprBaseListExec) : Int64; override;
    end;
 
+   TGlobalQueueSnapshotFunc = class(TInternalMagicDynArrayFunction)
+      procedure DoEvalAsDynArray(const args : TExprBaseListExec; var Result : IScriptDynArray); override;
+   end;
+
    TCleanupGlobalQueuesFunc = class(TInternalMagicProcedure)
       procedure DoEvalProc(const args : TExprBaseListExec); override;
    end;
@@ -183,6 +187,7 @@ function GlobalQueueInsert(const aName : String; const aValue : Variant) : Integ
 function GlobalQueuePull(const aName : String; var aValue : Variant) : Boolean;
 function GlobalQueuePop(const aName : String; var aValue : Variant) : Boolean;
 function GlobalQueueLength(const aName : String) : Integer;
+procedure GlobalQueueSnapshot(const aName : String; const destination : IScriptDynArray);
 procedure CleanupGlobalQueues(const filter : String = '*');
 
 function InternalGlobalVars : PGlobalVars;
@@ -221,9 +226,9 @@ const
 function PrivateVarPrefix(const args : TExprBaseListExec) : String;
 var
    scriptPos : TScriptPos;
-   expr : TPosDataExpr;
+   expr : TDataExpr;
 begin
-   expr:=(args.Expr as TPosDataExpr);
+   expr:=(args.Expr as TDataExpr);
    scriptPos := expr.ScriptPos;
    if scriptPos.IsMainModule then
       raise EScriptError.Create('Private variables cannot be referred from main module');
@@ -236,20 +241,43 @@ begin
    Result := PrivateVarPrefix(args) + args.AsString[0];
 end;
 
-procedure CheckVariantForGlobalStorage(const v : Variant);
+procedure CastVariantForGlobalStorage(const varIn : Variant; var varOut : Variant);
+
+   procedure RaiseUnsupportedVarType(vt : TVarType);
+   begin
+      raise EGlobalVarError.CreateFmt('Cannot store global of type %d',  [ vt ]);
+   end;
+
+   procedure HandleIUnknown(const varIn : Variant; var varOut : Variant);
+   var
+      named : IGetSelf;
+      toVariant : IToVariant;
+   begin
+      if IUnknown(TVarData(varIn).VUnknown).QueryInterface(IToVariant, toVariant) = S_OK then begin
+         toVariant.ToVariant(varOut);
+      end else begin
+         if IUnknown(TVarData(varIn).VUnknown).QueryInterface(IGetSelf, named) = S_OK then
+            raise EGlobalVarError.CreateFmt('Cannot store global of type %s',  [ named.ScriptTypeName ])
+         else RaiseUnsupportedVarType(TVarData(varIn).VType);
+      end;
+   end;
+
 var
    vt : TVarType;
 begin
-   vt := VarType(v);
+   vt := VarType(varIn);
    case vt of
       varEmpty, varNull,
       varSmallint, varShortInt, varInteger, varInt64,
       varByte, varWord, varUInt32, varUInt64,
       varSingle, varDouble,
       varCurrency, varDate, varBoolean,
-      varOleStr, varString, varUString : ;
+      varOleStr, varString, varUString :
+         VarCopySafe(varOut, varIn);
+      varUnknown :
+         HandleIUnknown(varIn, varOut);
    else
-      raise EGlobalVarError.CreateFmt('Cannot store global of type %d',  [ vt ]);
+      RaiseUnsupportedVarType(vt);
    end;
 end;
 
@@ -260,9 +288,11 @@ end;
 // WriteGlobalVar
 //
 function WriteGlobalVar(const aName : String; const aValue : Variant; expirationSeconds : Double) : Boolean;
+var
+   v : Variant;
 begin
-   CheckVariantForGlobalStorage(aValue);
-   Result:=vGlobalVars.Write(aName, aValue, expirationSeconds);
+   CastVariantForGlobalStorage(aValue, v);
+   Result := vGlobalVars.Write(aName, v, expirationSeconds);
 end;
 
 // ReadGlobalVarDef
@@ -283,10 +313,11 @@ end;
 // CompareExchangeGlobalVar
 //
 function CompareExchangeGlobalVar(const aName : String; const value, comparand : Variant) : Variant;
+var
+   v : Variant;
 begin
-   CheckVariantForGlobalStorage(value);
-
-   Result:=vGlobalVars.CompareExchange(aName, value, comparand);
+   CastVariantForGlobalStorage(value, v);
+   Result := vGlobalVars.CompareExchange(aName, v, comparand);
 end;
 
 // ReadGlobalVar
@@ -431,13 +462,14 @@ end;
 function GlobalQueuePush(const aName : String; const aValue : Variant) : Integer;
 var
    gq : TGlobalQueue;
+   v : Variant;
 begin
-   CheckVariantForGlobalStorage(aValue);
+   CastVariantForGlobalStorage(aValue, v);
    vGlobalQueuesCS.BeginWrite;
    try
-      gq:=vGlobalQueues.GetOrCreate(aName);
-      gq.Push(aValue);
-      Result:=gq.Count;
+      gq := vGlobalQueues.GetOrCreate(aName);
+      gq.Push(v);
+      Result := gq.Count;
    finally
       vGlobalQueuesCS.EndWrite;
    end;
@@ -448,13 +480,14 @@ end;
 function GlobalQueueInsert(const aName : String; const aValue : Variant) : Integer;
 var
    gq : TGlobalQueue;
+   v : Variant;
 begin
-   CheckVariantForGlobalStorage(aValue);
+   CastVariantForGlobalStorage(aValue, v);
    vGlobalQueuesCS.BeginWrite;
    try
-      gq:=vGlobalQueues.GetOrCreate(aName);
-      gq.Insert(aValue);
-      Result:=gq.Count;
+      gq := vGlobalQueues.GetOrCreate(aName);
+      gq.Insert(v);
+      Result := gq.Count;
    finally
       vGlobalQueuesCS.EndWrite;
    end;
@@ -506,6 +539,28 @@ begin
       if gq<>nil then
          Result:=gq.Count
       else Result:=0;
+   finally
+      vGlobalQueuesCS.EndRead;
+   end;
+end;
+
+// GlobalQueueSnapshot
+//
+procedure GlobalQueueSnapshot(const aName : String; const destination : IScriptDynArray);
+begin
+   vGlobalQueuesCS.BeginRead;
+   try
+      var gq := vGlobalQueues.Objects[aName];
+      if gq <> nil then begin
+         destination.ArrayLength := gq.Count;
+         if gq.Count > 0 then begin
+            var iter := gq.First;
+            for var i := 0 to gq.Count-1 do begin
+               destination.AsVariant[i] := iter.Value;
+               iter := iter.Next;
+            end;
+         end;
+      end;
    finally
       vGlobalQueuesCS.EndRead;
    end;
@@ -589,22 +644,22 @@ end;
 
 function TWriteGlobalVarFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
 var
-   buf : Variant;
+   buf, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, buf);
-   CheckVariantForGlobalStorage(buf);
-   Result:=vGlobalVars.Write(args.AsString[0], buf, 0);
+   CastVariantForGlobalStorage(buf, v);
+   Result := vGlobalVars.Write(args.AsString[0], v, 0);
 end;
 
 { TWriteGlobalVarExpireFunc }
 
 function TWriteGlobalVarExpireFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
 var
-   buf : Variant;
+   buf, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, buf);
-   CheckVariantForGlobalStorage(buf);
-   Result:=vGlobalVars.Write(args.AsString[0], buf, args.AsFloat[2]);
+   CastVariantForGlobalStorage(buf, v);
+   Result := vGlobalVars.Write(args.AsString[0], v, args.AsFloat[2]);
 end;
 
 // ------------------
@@ -622,12 +677,12 @@ end;
 
 procedure TCompareExchangeGlobalVarFunc.DoEvalAsVariant(const args : TExprBaseListExec; var result : Variant);
 var
-   value, comparand : Variant;
+   value, comparand, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, value);
-   CheckVariantForGlobalStorage(value);
+   CastVariantForGlobalStorage(value, v);
    args.ExprBase[2].EvalAsVariant(args.Exec, comparand);
-   result:=vGlobalVars.CompareExchange(args.AsString[0], value, comparand);
+   result := vGlobalVars.CompareExchange(args.AsString[0], v, comparand);
 end;
 
 { TDeleteGlobalVarFunc }
@@ -697,11 +752,11 @@ end;
 //
 function TGlobalQueuePushFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 var
-   buf : Variant;
+   buf, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, buf);
-   CheckVariantForGlobalStorage(buf);
-   Result:=GlobalQueuePush(args.AsString[0], buf);
+   CastVariantForGlobalStorage(buf, v);
+   Result := GlobalQueuePush(args.AsString[0], v);
 end;
 
 // ------------------
@@ -712,11 +767,11 @@ end;
 //
 function TGlobalQueueInsertFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 var
-   buf : Variant;
+   buf, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, buf);
-   CheckVariantForGlobalStorage(buf);
-   Result:=GlobalQueueInsert(args.AsString[0], buf);
+   CastVariantForGlobalStorage(buf, v);
+   Result := GlobalQueueInsert(args.AsString[0], v);
 end;
 
 // ------------------
@@ -772,6 +827,18 @@ begin
 end;
 
 // ------------------
+// ------------------ TGlobalQueueSnapshotFunc ------------------
+// ------------------
+
+// DoEvalAsDynArray
+//
+procedure TGlobalQueueSnapshotFunc.DoEvalAsDynArray(const args : TExprBaseListExec; var Result : IScriptDynArray);
+begin
+   result := TScriptDynamicValueArray.Create((args.Expr as TTypedExpr).Typ.Typ);
+   GlobalQueueSnapshot(args.AsString[0], Result);
+end;
+
+// ------------------
 // ------------------ TReadPrivateVarFunc ------------------
 // ------------------
 
@@ -791,11 +858,11 @@ end;
 //
 function TWritePrivateVarFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
 var
-   buf : Variant;
+   buf, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, buf);
-   CheckVariantForGlobalStorage(buf);
-   Result:=vPrivateVars.Write(PrivateVarName(args), buf, args.AsFloat[2]);
+   CastVariantForGlobalStorage(buf, v);
+   Result := vPrivateVars.Write(PrivateVarName(args), v, args.AsFloat[2]);
 end;
 
 { TCleanupPrivateVarsFunc }
@@ -809,12 +876,12 @@ end;
 
 procedure TCompareExchangePrivateVarFunc.DoEvalAsVariant(const args : TExprBaseListExec; var result : Variant);
 var
-   value, comparand : Variant;
+   value, comparand, v : Variant;
 begin
    args.ExprBase[1].EvalAsVariant(args.Exec, value);
-   CheckVariantForGlobalStorage(value);
+   CastVariantForGlobalStorage(value, v);
    args.ExprBase[2].EvalAsVariant(args.Exec, comparand);
-   result := vPrivateVars.CompareExchange(PrivateVarName(args), value, comparand);
+   result := vPrivateVars.CompareExchange(PrivateVarName(args), v, comparand);
 end;
 
 { TPrivateVarsNamesFunc }
@@ -892,6 +959,7 @@ initialization
    RegisterInternalBoolFunction(TGlobalQueuePullFunc, 'GlobalQueuePull', ['n', SYS_STRING, '@v', SYS_VARIANT]);
    RegisterInternalBoolFunction(TGlobalQueuePopFunc, 'GlobalQueuePop', ['n', SYS_STRING, '@v', SYS_VARIANT]);
    RegisterInternalIntFunction(TGlobalQueueLengthFunc, 'GlobalQueueLength', ['n', SYS_STRING]);
+   RegisterInternalFunction(TGlobalQueueSnapshotFunc, 'GlobalQueueSnapshot', ['n', SYS_STRING], SYS_ARRAY_OF_VARIANT);
    RegisterInternalProcedure(TCleanupGlobalQueuesFunc, 'CleanupGlobalQueues', ['filter=*', SYS_STRING]);
 
 finalization
