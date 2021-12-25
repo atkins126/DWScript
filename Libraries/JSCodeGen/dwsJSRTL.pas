@@ -174,7 +174,7 @@ uses dwsJSON, dwsXPlatform, SynZip;
 {$R dwsJSRTL.res}
 
 const
-   cJSRTLDependencies : array [1..299{$ifdef JS_BIGINTEGER} + 16{$endif}] of TJSRTLDependency = (
+   cJSRTLDependencies : array [1..305{$ifdef JS_BIGINTEGER} + 16{$endif}] of TJSRTLDependency = (
       // codegen utility functions
       (Name : '$CheckStep';
        Code : 'function $CheckStep(s,z) { if (s>0) return s; throw Exception.Create($New(Exception),"FOR loop STEP should be strictly positive: "+s.toString()+z); }';
@@ -625,11 +625,18 @@ const
 
       // RTL functions
 
-       (Name : 'Abs$_Float_';
+      (Name : 'array_of_Float$Multiply';
+       Code : 'function array_of_Float$Multiply(a,v) { for (var i=0;i<a.length;i++) a[i]*=v; return a }'),
+      (Name : 'array_of_Float$Offset';
+       Code : 'function array_of_Float$Offset(a,v) { for (var i=0;i<a.length;i++) a[i]+=v; return a }'),
+      (Name : 'array_of_Float$Reciprocal';
+       Code : 'function array_of_Float$Reciprocal(a,v) { for (var i=0;i<a.length;i++) a[i]=1/a[i]; return a }'),
+
+      (Name : 'Abs$_Float_';
        Code : 'var Abs$_Float_ = Math.abs;'),
-       (Name : 'Abs$_Integer_';
+      (Name : 'Abs$_Integer_';
        Code : 'var Abs$_Integer_ = Math.abs;'),
-       (Name : 'Abs$_Variant_';
+      (Name : 'Abs$_Variant_';
        Code : 'var Abs$_Variant_ = Math.abs;'),
       (Name : 'AnsiCompareStr';
        Code : 'function AnsiCompareStr(a,b) { return a.localeCompare(b) }'),
@@ -904,8 +911,10 @@ const
        Code : 'function IntToHex(v,d) { var r=v.toString(16); return "00000000".substr(0, d-r.length)+r }'),
       (Name : 'IntToHex2';
        Code : 'function IntToHex2(v) { var r=v.toString(16); return (r.length==1)?"0"+r:r }'),
-      (Name : 'IntToStr';
-       Code : 'function IntToStr(i) { return i.toString() }'),
+      (Name : 'IntToStr$_Integer_';
+       Code : 'function IntToStr$_Integer_(i) { return i.toString() }'),
+      (Name : 'IntToStr$_Integer_Integer_';
+       Code : 'function IntToStr$_Integer_Integer_(i) { return i.toString() }'),
       (Name : 'IsDelimiter';
        Code : 'function IsDelimiter(d,s,i) { if ((i<=0)||(i>s.length)) return false; else return d.indexOf(s.charAt(i-1))>=0; }'),
       (Name : 'IsLeapYear';
@@ -1145,8 +1154,10 @@ const
               + #9'return r;'#10
               + '}';
        Dependency : 'StrToHtml' ),
-      (Name : 'StrToInt';
-       Code : 'function StrToInt(v) { return parseInt(v,10) }'),
+      (Name : 'StrToInt$_String_';
+       Code : 'function StrToInt$_String_(v) { return parseInt(v) }'),
+      (Name : 'StrToInt$_String_Integer_';
+       Code : 'function StrToInt$_String_Integer_(v,b) { return parseInt(v,b) }'),
       (Name : 'StrToIntDef';
        Code : 'function StrToIntDef(v,d) { var r=parseInt(v,10); return isNaN(r)?d:r }'),
       (Name : 'StrToJSON';
@@ -1209,6 +1220,8 @@ const
        Code : 'function TrimRight(s) { return s.replace(/\s\s*$/, "") }'),
       (Name : 'Trunc';
        Code : 'function Trunc(v) { return (v>=0)?Math.floor(v):Math.ceil(v) }'),
+      (Name : 'TryStrToInt';
+       Code : 'function TryStrToInt(s,b,v) { var i=parseInt(s,b), r=isFinite(i); if (r) { v.v=i } return r }'),
       (Name : 'UnixTime';
        Code : 'function UnixTime() { return Math.trunc(Date.now()*1e-3) }'),
       (Name : 'UnixTimeToDateTime';
@@ -1529,7 +1542,8 @@ begin
    FMagicCodeGens.AddObject('Infinity', TdwsExprGenericCodeGen.Create(['Infinity']));
    FMagicCodeGens.AddObject('IntPower', TdwsExprGenericCodeGen.Create(['Math.pow', '(', 0, ',', 1, ')']));
    FMagicCodeGens.AddObject('IntToHex', TJSIntToHexExpr.Create);
-   FMagicCodeGens.AddObject('IntToStr', TJSIntToStrExpr.Create);
+   FMagicCodeGens.AddObject('IntToStr$_Integer_', TJSIntToStrExpr.Create);
+   FMagicCodeGens.AddObject('IntToStr$_Integer_Integer_', TJSIntToStrExpr.Create);
    FMagicCodeGens.AddObject('IsFinite', TdwsExprGenericCodeGen.Create(['isFinite', '(', 0, ')']));
    FMagicCodeGens.AddObject('IsNaN', TdwsExprGenericCodeGen.Create(['isNaN', '(', 0, ')']));
    FMagicCodeGens.AddObject('LeftStr', TJSGenericSimpleMethodExpr.Create('.substr(0,', ')'));
@@ -1568,7 +1582,8 @@ begin
    FMagicCodeGens.AddObject('StrSplit', TJSGenericSimpleMethodExpr.Create('.split(', ')'));
    FMagicCodeGens.AddObject('StrToCSSText', TdwsExprGenericCodeGen.Create(['CSS.text', '(', 0, ')']));
    FMagicCodeGens.AddObject('StrToFloat', TdwsExprGenericCodeGen.Create(['parseFloat', '(', 0, ')']));
-   FMagicCodeGens.AddObject('StrToInt', TdwsExprGenericCodeGen.Create(['parseInt', '(', 0, ',', '10)']));
+   FMagicCodeGens.AddObject('StrToInt$_String_', TdwsExprGenericCodeGen.Create(['parseInt', '(', 0, ',', '10)']));
+   FMagicCodeGens.AddObject('StrToInt$_String_Integer_', TdwsExprGenericCodeGen.Create(['parseInt', '(', 0, ',', 1, ')']));
    FMagicCodeGens.AddObject('StrToJSON', TdwsExprGenericCodeGen.Create(['JSON.stringify', '(', 0, ')']));
    FMagicCodeGens.AddObject('SubStr', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.substr(', '(', 1, ')', '-1)']));
    FMagicCodeGens.AddObject('SubString', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.substr(', '(', 1, ')', '-1,', '(', 2, ')', '-2)']));
@@ -1610,7 +1625,7 @@ var
 begin
    if e.FuncSym.IsOverloaded then
       name:=TJSFuncBaseExpr.GetSignature(e.FuncSym)
-   else name:=e.FuncSym.QualifiedName;
+   else name := StrReplaceChar(e.FuncSym.QualifiedName, ' ', '_');
    if cgoNoInlineMagics in codeGen.Options then
       i:=-1
    else i:=FMagicCodeGens.IndexOf(name);
@@ -1660,6 +1675,7 @@ begin
    if e.FuncSym.IsOverloaded then
       name := GetSignature(e.FuncSym)
    else name := e.FuncSym.QualifiedName;
+   name := StrReplaceChar(name, ' ', '_');
    name := CanonicalName(name);
    codeGen.WriteString(name);
    codeGen.Dependencies.Add(name);
@@ -1799,11 +1815,23 @@ end;
 procedure TJSIntToStrExpr.CodeGen(codeGen : TdwsCodeGen; expr : TExprBase);
 var
    e : TMagicFuncExpr;
-   a : TExprBase;
+   a, baseExpr : TExprBase;
+   base : Integer;
 begin
-   e:=TMagicFuncExpr(expr);
+   e := TMagicFuncExpr(expr);
 
-   a:=e.Args[0];
+   if e.Args.Count = 2 then begin
+      baseExpr := e.Args[1];
+      if baseExpr.IsConstant then begin
+         base := baseExpr.EvalAsInteger(nil);
+         baseExpr := nil;
+      end else base := 0;
+   end else begin
+      base := 10;
+      baseExpr := nil;
+   end;
+
+   a := e.Args[0];
    if (a is TVarExpr) or (a is TFuncExpr) or (a is TFieldExpr) then
       codeGen.Compile(a)
    else begin
@@ -1812,7 +1840,15 @@ begin
       codeGen.CompileNoWrap(TTypedExpr(a));
       codeGen.WriteString(')');
    end;
-   codeGen.WriteString('.toString()');
+   if (baseExpr = nil) and (base = 10) then
+      codeGen.WriteString('.toString()')
+   else begin
+      codeGen.WriteString('.toString(');
+      if baseExpr <> nil then
+         codeGen.CompileNoWrap(baseExpr as TTypedExpr)
+      else codeGen.WriteInteger(base);
+      codeGen.WriteString(')');
+   end;
 end;
 
 // ------------------
