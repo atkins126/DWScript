@@ -46,22 +46,24 @@ unit dwsXPlatform;
 interface
 
 uses
-   Classes, SysUtils, Types, Masks, Registry, SyncObjs, Variants, StrUtils,
+   Classes, SysUtils, Types, Masks, SyncObjs, Variants, StrUtils,
    {$ifdef DELPHI_XE3_PLUS}
    DateUtils,
    {$endif}
    {$IFDEF FPC}
-      {$IFDEF Windows}
+      {$IFDEF WINDOWS}
          Windows
       {$ELSE}
          LCLIntf
       {$ENDIF}
    {$ELSE}
-      Windows
+      {$IFDEF WINDOWS}
+      Windows, Registry
+      {$ENDIF}
       {$IFNDEF VER200}, IOUtils{$ENDIF}
       {$IFDEF UNIX}
          {$IFDEF POSIXSYSLOG}, Posix.Syslog{$ENDIF}
-         Posix.Unistd, Posix.Time, Posix.Pthread,
+         Posix.Unistd, Posix.Time, Posix.Pthread, System.Internal.ICU,
          dwsXPlatformTimer,
       {$ENDIF}
    {$ENDIF}
@@ -281,6 +283,7 @@ function UnicodeStringReplace(const s, oldPattern, newPattern: String; flags: TR
 
 function UnicodeCompareP(p1 : PWideChar; n1 : Integer; p2 : PWideChar; n2 : Integer) : Integer; overload;
 function UnicodeCompareP(p1, p2 : PWideChar; n : Integer) : Integer; overload;
+function UnicodeCompareEx(const a, b : UnicodeString; const locale : UnicodeString; caseSensitive : Boolean) : Integer;
 
 procedure UnicodeLowerCase(const s : UnicodeString; var result : UnicodeString); overload;
 function  UnicodeLowerCase(const s : UnicodeString) : UnicodeString; overload; inline; deprecated 'use procedure form';
@@ -418,11 +421,11 @@ type
 
 {$ifndef SRW_FALLBACK}
 procedure AcquireSRWLockExclusive(var SRWLock : Pointer); stdcall; external 'kernel32.dll';
-function TryAcquireSRWLockExclusive(var SRWLock : Pointer) : BOOL; stdcall; external 'kernel32.dll';
+function TryAcquireSRWLockExclusive(var SRWLock : Pointer) : ByteBool; stdcall; external 'kernel32.dll';
 procedure ReleaseSRWLockExclusive(var SRWLock : Pointer); stdcall; external 'kernel32.dll';
 
 procedure AcquireSRWLockShared(var SRWLock : Pointer); stdcall; external 'kernel32.dll';
-function TryAcquireSRWLockShared(var SRWLock : Pointer) : BOOL; stdcall; external 'kernel32.dll';
+function TryAcquireSRWLockShared(var SRWLock : Pointer) : ByteBool; stdcall; external 'kernel32.dll';
 procedure ReleaseSRWLockShared(var SRWLock : Pointer); stdcall; external 'kernel32.dll';
 {$endif}
 
@@ -577,19 +580,21 @@ end;
 // UTCDateTime
 //
 function UTCDateTime : TDateTime;
+{$ifdef WINDOWS}
 var
    systemTime : TSystemTime;
 begin
-   {$ifdef Windows}
    FillChar(systemTime, SizeOf(systemTime), 0);
    GetSystemTime(systemTime);
    with systemTime do
       Result:= EncodeDate(wYear, wMonth, wDay)
               +EncodeTime(wHour, wMinute, wSecond, wMilliseconds);
-   {$else}
-   Result := Now; // TODO : correct implementation
-   {$endif}
 end;
+{$else}
+begin
+   Result := Now; // TODO : correct implementation
+end;
+{$endif}
 
 // UnixTime
 //
@@ -598,6 +603,7 @@ begin
    Result:=Trunc(UTCDateTime*86400)-Int64(25569)*86400;
 end;
 
+{$IFNDEF LINUX}
 type
    TDynamicTimeZoneInformation = record
       Bias : Longint;
@@ -618,6 +624,7 @@ function GetTimeZoneInformationForYear(wYear: USHORT; lpDynamicTimeZoneInformati
       var lpTimeZoneInformation: TTimeZoneInformation): BOOL; stdcall; external 'kernel32' {$ifndef FPC}delayed{$endif};
 function TzSpecificLocalTimeToSystemTime(lpTimeZoneInformation: PTimeZoneInformation;
       var lpLocalTime, lpUniversalTime: TSystemTime): BOOL; stdcall; external 'kernel32' {$ifndef FPC}delayed{$endif};
+{$ENDIF}
 
 // LocalDateTimeToUTCDateTime
 //
@@ -762,6 +769,10 @@ begin
 end;
 
 {$ifdef WINDOWS}
+const
+   CSTR_LESS_THAN    = 1;
+   CSTR_EQUAL        = 2;
+   CSTR_GREATER_THAN = 3;
 function CompareStringEx(
    lpLocaleName: LPCWSTR; dwCmpFlags: DWORD;
    lpString1: LPCWSTR; cchCount1: Integer;
@@ -774,10 +785,11 @@ function CompareStringEx(
 //
 function UnicodeCompareP(p1 : PWideChar; n1 : Integer; p2 : PWideChar; n2 : Integer) : Integer;
 {$ifdef WINDOWS}
-const
-   CSTR_EQUAL = 2;
 begin
-   Result := CompareStringEx(nil, NORM_IGNORECASE, p1, n1, p2, n2, nil, nil, 0)-CSTR_EQUAL;
+   Result := CompareStringEx(nil, NORM_IGNORECASE, p1, n1, p2, n2, nil, nil, 0);
+   if Result = 0 then
+      RaiseLastOSError
+   else Dec(Result, CSTR_EQUAL);
 end;
 {$else}
 begin
@@ -787,14 +799,30 @@ begin
 end;
 {$endif}
 
+// UnicodeCompareEx
+//
+function UnicodeCompareEx(const a, b : UnicodeString; const locale : UnicodeString; caseSensitive : Boolean) : Integer;
+var
+   flags : Integer;
+begin
+   if caseSensitive then
+      flags := 0
+   else flags := NORM_IGNORECASE;
+   Result := CompareStringEx(PChar(locale), flags, PChar(a), Length(a), PChar(b), Length(b), nil, nil, 0);
+   if Result = 0 then
+      RaiseLastOSError
+   else Dec(Result, CSTR_EQUAL);
+end;
+
 // UnicodeCompareP
 //
 function UnicodeCompareP(p1, p2 : PWideChar; n : Integer) : Integer; overload;
 {$ifdef WINDOWS}
-const
-   CSTR_EQUAL = 2;
 begin
-   Result := CompareStringEx(nil, NORM_IGNORECASE, p1, n, p2, n, nil, nil, 0) - CSTR_EQUAL;
+   Result := CompareStringEx(nil, NORM_IGNORECASE, p1, n, p2, n, nil, nil, 0);
+   if Result = 0 then
+      RaiseLastOSError
+   else Dec(Result, CSTR_EQUAL);
 end;
 {$else}
 begin
@@ -941,7 +969,6 @@ begin
    // Possible solutions:
    // http://www.delphitop.com/html/danyuan/1472.html
    // https://github.com/graemeg/freepascal/blob/master/rtl/objpas/unicodedata.pas
-   }
    Result := s; // TODO
 end;
 {$endif}
@@ -1738,6 +1765,7 @@ end;
 
 // ReadFileChunked
 //
+{$IFDEF WINDOWS}
 function ReadFileChunked(hFile : THandle; const buffer; size : Integer) : Integer;
 const
    CHUNK_SIZE = 16384;
@@ -1763,6 +1791,7 @@ begin
    until nRemaining <= 0;
    Result := size;
 end;
+{$ENDIF}
 
 // LoadDataFromFile
 //
@@ -1802,6 +1831,7 @@ end;
 // SaveDataToFile
 //
 procedure SaveDataToFile(const fileName : TFileName; const data : TBytes);
+{$IFDEF WINDOWS}
 var
    hFile : THandle;
    n, nWrite : DWORD;
@@ -1816,6 +1846,11 @@ begin
       CloseFileHandle(hFile);
    end;
 end;
+{$ELSE}
+begin
+   IOUTils.TFile.WriteAllBytes(fileName, data);
+end;
+{$ENDIF}
 
 // LoadRawBytesFromFile
 //
@@ -1852,7 +1887,7 @@ begin
    fs := TFileStream.Create(fileName, fmOpenRead);
    try
       SetLength(Result, fs.Size);
-      if Read(Pointer(Result)^, fs.Size) <> fs.Size then
+      if fs.Read(Pointer(Result)^, fs.Size) <> fs.Size then
          raise Exception.Create('stream read exception - data size mismatch');
    finally
       fs.Free;
@@ -1900,6 +1935,62 @@ end;
 
 // LoadRawBytesAsScriptStringFromFile
 //
+procedure BytesToWordsInPlace(p : Pointer; n : NativeInt);
+{$ifdef WIN64_ASM}
+asm  // p -> rcx     n -> rdx
+   lea         r8,  [ rcx + rdx ]   //  r8 -> src
+   lea         rcx, [ rcx + rdx*2 ] // rcx -> dest
+
+   cmp         rdx, 16
+   jb          @@lessthan16
+
+   mov         eax, edx
+   shr         eax, 4
+   and         rdx, 15
+
+   pxor        xmm0, xmm0
+
+@@loop16:
+   sub         r8,  16
+   sub         rcx, 32
+
+   movq        xmm1, [r8]
+   movq        xmm2, [r8+8]
+   punpcklbw   xmm1, xmm0
+   punpcklbw   xmm2, xmm0
+   movdqu      [rcx], xmm1
+   movdqu      [rcx+16], xmm2
+
+   dec         eax
+   jnz         @@loop16
+
+@@lessthan16:
+   test        rdx, rdx
+   jz          @@end
+
+@@loop1:
+   dec         r8
+   sub         rcx, 2
+   mov         al, [r8]
+   mov         [rcx], ax
+   dec         rdx
+   jnz         @@loop1
+
+@@end:
+end;
+{$else}
+begin
+   var pw := PWord(IntPtr(p) + (n-1) * SizeOf(Word));
+   var pb := PByte(IntPtr(p) + (n-1) * SizeOf(Byte));
+   while n > 0 do begin
+      pw^ := pb^;
+      Dec(pw);
+      Dec(pb);
+      Dec(n);
+   end;
+end;
+{$endif}
+
 procedure LoadRawBytesAsScriptStringFromFile(const fileName : TFileName; var result : String);
 {$ifdef WINDOWS}
 const
@@ -1907,9 +1998,8 @@ const
 var
    hFile : THandle;
    n : Int64;
-   i, nRead : Cardinal;
+   nRead : Cardinal;
    pDest : PWord;
-   buffer : array [0..16383] of Byte;
 begin
    if fileName = '' then Exit;
    hFile := OpenFileForSequentialReadOnly(fileName);
@@ -1922,23 +2012,14 @@ begin
          if Length(Result) <> n then
             raise Exception.CreateFmt('File too large (%d)', [ n ]);
          pDest := Pointer(Result);
-         repeat
-            if n > SizeOf(Buffer) then
-               nRead := SizeOf(Buffer)
-            else nRead := n;
-            if not ReadFile(hFile, buffer, nRead, nRead, nil) then
-               RaiseLastOSError
-            else if nRead = 0 then begin
-               // file got trimmed while we were reading
-               SetLength(Result, Length(Result)-Integer(n));
-               Break;
-            end;
-            for i := 1 to nRead do begin
-               pDest^ := buffer[i-1];
-               Inc(pDest);
-            end;
-            Dec(n, nRead);
-         until n <= 0;
+         ReadFile(hFile, pDest^, n, nRead, nil);
+         if nRead <> n then begin
+            // file got trimmed while we were reading
+            SetLength(Result, nRead);
+            n := nRead;
+         end;
+         if n > 0 then
+            BytesToWordsInPlace(pDest, n);
       end;
    finally
       CloseFileHandle(hFile);
@@ -1984,12 +2065,18 @@ end;
 //
 function OpenFileForSequentialReadOnly(const fileName : TFileName) : THandle;
 begin
+   {$IFDEF WINDOWS}
    Result:=CreateFile(PChar(fileName), GENERIC_READ, FILE_SHARE_READ+FILE_SHARE_WRITE,
                       nil, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, 0);
    if Result=INVALID_HANDLE_VALUE then begin
       if GetLastError<>ERROR_FILE_NOT_FOUND then
          RaiseLastOSError;
    end;
+   {$ELSE}
+   Result := SysUtils.FileCreate(fileName, fmOpenRead, $007);
+   if Result = INVALID_HANDLE_VALUE then
+      raise Exception.Create('invalid file handle');
+   {$ENDIF}
 end;
 
 // OpenFileForSequentialWriteOnly
@@ -2147,6 +2234,7 @@ end;
 // FileSetDateTime
 //
 procedure FileSetDateTime(hFile : THandle; const aDateTime : TdwsDateTime);
+{$IFDEF WINDOWS}
 var
    doNotChange, newTimeStamp : TFileTime;
 begin
@@ -2155,6 +2243,12 @@ begin
    doNotChange.dwHighDateTime := Cardinal(-1);
    SetFileTime(hFile, @doNotChange, @newTimeStamp, @newTimeStamp);
 end;
+{$ELSE}
+begin
+  { TODO : Check unix implementation }
+  raise Exception.Create('not implemented');
+end;
+{$ENDIF}
 
 // DeleteDirectory
 //
@@ -2273,7 +2367,7 @@ function RDTSC : UInt64;
 begin
    // TODO : Implement true RDTSC function
    // if asm does not work we use a fake, monotonous, vaguely random ersatz
-   Result := Int64(InterlockedAdd64(vFakeRDTSC, (GetSystemTimeMilliseconds and $ffff)*7919));
+   Result := Int64(InterlockedAdd64(vFakeRDTSC, 1+(GetSystemTimeMilliseconds and $ffff)*7919));
 end;
 {$endif}
 
@@ -2395,6 +2489,15 @@ begin
    Result := (vApplicationVersionRetrieved = 1);
    if Result then
       version := vApplicationVersion;
+end;
+{$else}
+function GetModuleVersion(instance : THandle; var version : TModuleVersion) : Boolean;
+begin
+   Result := False;
+end;
+function GetApplicationVersion(var version : TModuleVersion) : Boolean;
+begin
+   Result := False;
 end;
 {$endif}
 
@@ -2918,6 +3021,7 @@ end;
 // GetAsDosDateTime
 //
 function TdwsDateTime.GetAsDosDateTime : Integer;
+{$IFDEF WINDOWS}
 var
    fileTime : TFileTime;
    dosTime : LongRec;
@@ -2926,6 +3030,11 @@ begin
    FileTimeToDosDateTime(fileTime, dosTime.Hi, dosTime.Lo);
    Result := Integer(dosTime);
 end;
+{$ELSE}
+begin
+   Result := Integer(SysUtils.DateTimeToFileDate(Self.AsLocalDateTime));
+end;
+{$ENDIF}
 
 // GetAsFileTime
 //

@@ -322,6 +322,7 @@ type
    TSymbol = class (TRefCountedObject)
       private
          FName : String;
+         FExternalName : String;
 
       protected
          FTyp : TTypeSymbol;
@@ -332,6 +333,7 @@ type
          function GetDescription : String; virtual;
          function GetAsFuncSymbol : TFuncSymbol; virtual;
          function GetIsGeneric : Boolean; virtual;
+         function GetExternalName : String;
 
       public
          constructor Create(const aName : String; aType : TTypeSymbol);
@@ -353,11 +355,21 @@ type
 
          function Specialize(const context : ISpecializationContext) : TSymbol; virtual;
 
+         // Caption is a short way to describe the symbol,
+         // using the Name when set or a type summary for anonymous symbols
+         // it should be single-ligne
          property Caption : String read SafeGetCaption;
+
+         // Description is a more detailed description than Caption
+         // and can span multiple lines, explicit constant values, etc.
          property Description : String read GetDescription;
+
          property Name : String read FName;
          property Typ : TTypeSymbol read FTyp write FTyp;
          property Size : Integer read FSize;
+
+         function HasExternalName : Boolean; inline;
+         property ExternalName : String read GetExternalName write FExternalName;
    end;
 
    TSymbolClass = class of TSymbol;
@@ -554,21 +566,17 @@ type
    // variable: var x: Integer;
    TDataSymbol = class (TValueSymbol)
       protected
-         FExternalName : String;
          FStackAddr : Integer;
          FLevel : SmallInt;
          FUsedBySubLevel : Boolean;
 
          function GetDescription : String; override;
-         function GetExternalName : String;
 
       public
          procedure AllocateStackAddr(generator : TAddrGenerator);
 
-         function HasExternalName : Boolean;
          function IsWritable : Boolean; virtual;
 
-         property ExternalName : String read GetExternalName write FExternalName;
          property Level : SmallInt read FLevel write FLevel;
          property UsedBySubLevel : Boolean read FUsedBySubLevel write FUsedBySubLevel;
          property StackAddr: Integer read FStackAddr write FStackAddr;
@@ -598,7 +606,7 @@ type
    end;
 
    TParamSymbolSemantics = ( pssCopy, pssConst, pssVar, pssLazy );
-   TParamSymbolOption = ( psoForbidImplicitCasts );
+   TParamSymbolOption = ( psoForbidImplicitCasts, psoInternal );
    TParamSymbolOptions = set of TParamSymbolOption;
 
    // parameter: procedure P(x: Integer);
@@ -617,6 +625,7 @@ type
          function SameParam(other : TParamSymbol) : Boolean; virtual;
          function Semantics : TParamSymbolSemantics; virtual;
          function ForbidImplicitCasts : Boolean;
+         function IsInternal : Boolean;
    end;
 
    THasParamSymbolMethod = function (param : TParamSymbol) : Boolean of object;
@@ -643,7 +652,7 @@ type
    // const/var parameter: procedure P(const/var x: Integer)
    TByRefParamSymbol = class(TParamSymbol)
       public
-         constructor Create(const Name: String; Typ: TTypeSymbol);
+         constructor Create(const aName : String; aTyp : TTypeSymbol; const options : TParamSymbolOptions);
          function Clone : TParamSymbol; override;
          function Specialize(const context : ISpecializationContext) : TSymbol; override;
    end;
@@ -692,6 +701,7 @@ type
 
       protected
          function DoIsOfType(typSym : TTypeSymbol) : Boolean; virtual;
+         function GetUnAliasedType : TTypeSymbol; virtual;
 
          function GetIsDeprecated : Boolean; inline;
 
@@ -703,7 +713,7 @@ type
 
          function IsType : Boolean; override;
          function BaseType : TTypeSymbol; override;
-         function UnAliasedType : TTypeSymbol; virtual;
+         function UnAliasedType : TTypeSymbol; inline;
          function UnAliasedTypeIs(const typeSymbolClass : TTypeSymbolClass) : Boolean; inline;
          function IsOfType(typSym : TTypeSymbol) : Boolean;
          function IsCompatible(typSym : TTypeSymbol) : Boolean; virtual;
@@ -812,7 +822,6 @@ type
          FConditions : TConditionsSymbolTable;
          FFlags : TFuncSymbolFlags;
          FKind : TFuncKind;
-         FExternalName : String;
          FExternalConvention: TTokenType;
 
          procedure SetType(const value : TTypeSymbol);
@@ -845,8 +854,6 @@ type
          procedure SetDeclarationPosition(const val : TScriptPos); virtual;
          function GetImplementationPosition : TScriptPos; virtual;
          procedure SetImplementationPosition(const val : TScriptPos); virtual;
-
-         function GetExternalName : String;
 
          function GetSourceSubExpr(i : Integer) : TExprBase;
          function GetSourceSubExprCount : Integer;
@@ -900,8 +907,6 @@ type
          property IsReferenceTo : Boolean read GetIsReferenceTo write SetIsReferenceTo;
          property IsAsync : Boolean read GetIsAsync write SetIsAsync;
          property Kind : TFuncKind read FKind write FKind;
-         property ExternalName : String read GetExternalName write FExternalName;
-         function HasExternalName : Boolean;
          property ExternalConvention: TTokenType read FExternalConvention write FExternalConvention;
          property IsLambda : Boolean read GetIsLambda write SetIsLambda;
          property Level : SmallInt read GetLevel;
@@ -1102,12 +1107,13 @@ type
    TAliasSymbol = class sealed (TTypeSymbol)
       protected
          function DoIsOfType(typSym : TTypeSymbol) : Boolean; override;
+         function GetUnAliasedType : TTypeSymbol; override;
          function GetAsFuncSymbol : TFuncSymbol; override;
          function GetDescription : String; override;
+         function GetCaption : String; override;
 
       public
          function BaseType : TTypeSymbol; override;
-         function UnAliasedType : TTypeSymbol; override;
          procedure InitData(const data : TData; offset : Integer); override;
          procedure InitVariant(var v : Variant); override;
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
@@ -1271,6 +1277,7 @@ type
    TDynamicArraySymbol = class sealed (TArraySymbol)
       protected
          function GetCaption : String; override;
+         function GetDescription : String; override;
          function DoIsOfType(typSym : TTypeSymbol) : Boolean; override;
 
       protected
@@ -1423,7 +1430,6 @@ type
          function GetIsStatic : Boolean; virtual;
          function GetIsExternal : Boolean; virtual;
          function GetIsExternalRooted : Boolean; virtual;
-         function GetExternalName : String; virtual;
          function GetIsPartial : Boolean; virtual;
          function GetIsImmutable : Boolean; virtual;
 
@@ -1479,7 +1485,6 @@ type
          property IsPartial : Boolean read GetIsPartial;
          property IsExternal : Boolean read GetIsExternal;
          property IsExternalRooted : Boolean read GetIsExternalRooted;
-         property ExternalName : String read GetExternalName;
          property IsImmutable : Boolean read GetIsImmutable;
    end;
 
@@ -1488,11 +1493,9 @@ type
       private
          FMetaSymbol : TStructuredTypeMetaSymbol;
          FForwardPosition : PScriptPos;
-         FExternalName : String;
 
       protected
          function GetIsExternal : Boolean; override;
-         function GetExternalName : String; override;
 
          function GetMetaSymbol : TStructuredTypeMetaSymbol; override;
 
@@ -1512,7 +1515,6 @@ type
          procedure ClearIsForwarded;
 
          function IsForwarded : Boolean; override;
-         property ExternalName : String read GetExternalName write FExternalName;
 
          property MetaSymbol : TStructuredTypeMetaSymbol read FMetaSymbol;
    end;
@@ -1538,10 +1540,7 @@ type
          FVisibility : TdwsVisibility;
          FDefaultValue : TData;
          FDefaultExpr : TExprBase;
-         FExternalName : String;
          FNextField : TFieldSymbol;
-
-         function GetExternalName : String;
 
       public
          constructor Create(const name : String; typ : TTypeSymbol;
@@ -1550,7 +1549,6 @@ type
 
          function QualifiedName : String; override;
          function IsVisibleFor(const aVisibility : TdwsVisibility) : Boolean; override;
-         function HasExternalName : Boolean; inline;
 
          procedure InitData(const data : TData; structOffset : Integer);
 
@@ -1559,7 +1557,6 @@ type
          property Visibility : TdwsVisibility read FVisibility write FVisibility;
          property DefaultValue : TData read FDefaultValue write FDefaultValue;
          property DefaultExpr : TExprBase read FDefaultExpr write FDefaultExpr;
-         property ExternalName : String read GetExternalName write FExternalName;
          property NextField : TFieldSymbol read FNextField write FNextField;
    end;
 
@@ -1660,7 +1657,6 @@ type
          FDefaultSym : TConstSymbol;
          FVisibility : TdwsVisibility;
          FDeprecatedMessage : String;
-         FExternalName : String;
          FUserDescription : String;
 
       protected
@@ -1670,7 +1666,6 @@ type
          function GetArrayIndices : TParamsSymbolTable;
          procedure AddParam(Param : TParamSymbol);
          function GetIsDeprecated : Boolean; inline;
-         function GetExternalName : String;
 
       public
          constructor Create(const name : String; typ : TTypeSymbol; aVisibility : TdwsVisibility;
@@ -1697,7 +1692,6 @@ type
          property DefaultSym : TConstSymbol read FDefaultSym write FDefaultSym;
          property DeprecatedMessage : String read FDeprecatedMessage write FDeprecatedMessage;
          property IsDeprecated : Boolean read GetIsDeprecated;
-         property ExternalName : String read GetExternalName write FExternalName;
          property UserDescription : String read FUserDescription write FUserDescription;
    end;
 
@@ -1948,7 +1942,7 @@ type
    TEnumerationSymbolStyle = (enumClassic, enumScoped, enumFlags);
 
    // Enumeration type. E. g. "type myEnum = (One, Two, Three);"
-   TEnumerationSymbol = class sealed (TTypeSymbol)
+   TEnumerationSymbol = class sealed (TTypeWithPseudoMethodsSymbol)
       private
          FElements : TSymbolTable;
          FLowBound, FHighBound : Int64;
@@ -1959,6 +1953,8 @@ type
          function GetCaption : String; override;
          function GetDescription : String; override;
          function DoIsOfType(typSym : TTypeSymbol) : Boolean; override;
+
+         function InitializePseudoMethodSymbol(methodKind : TArrayMethodKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; override;
 
       public
          constructor Create(const name : String; baseType : TTypeSymbol;
@@ -1972,6 +1968,7 @@ type
 
          procedure AddElement(element : TElementSymbol);
          function ElementByValue(const value : Int64) : TElementSymbol;
+         function ElementByName(const name : String) : TElementSymbol;
 
          property Elements : TSymbolTable read FElements;
          property Style : TEnumerationSymbolStyle read FStyle;
@@ -2592,25 +2589,37 @@ end;
 constructor TSymbol.Create(const aName : String; aType : TTypeSymbol);
 begin
    inherited Create;
-   FName:=aName;
-   FTyp:=aType;
+   FName := aName;
+   FTyp := aType;
    if Assigned(aType) then
-      FSize:=aType.FSize
-   else FSize:=0;
+      FSize := aType.FSize;
+end;
+
+// SafeGetCaption
+//
+function TSymbol.SafeGetCaption : String;
+begin
+   if Self = nil then
+      Result := SYS_VOID
+   else Result := GetCaption;
 end;
 
 // GetCaption
 //
 function TSymbol.GetCaption : String;
 begin
-   Result := FName;
+   if Name <> '' then
+      Result := Name
+   else Result := ClassName;
 end;
 
 // GetDescription
 //
 function TSymbol.GetDescription : String;
 begin
-   Result:=Caption;
+   if FName <> '' then
+      Result := FName
+   else Result := Caption;
 end;
 
 // Initialize
@@ -2654,6 +2663,15 @@ begin
    if FTyp <> nil then
       Result := FTyp.IsGeneric
    else Result := False;
+end;
+
+// GetExternalName
+//
+function TSymbol.GetExternalName : String;
+begin
+   if FExternalName <> '' then
+      Result := FExternalName
+   else Result := FName;
 end;
 
 // AsFuncSymbol
@@ -2706,6 +2724,13 @@ begin
    Result := nil;
 end;
 
+// HasExternalName
+//
+function TSymbol.HasExternalName : Boolean;
+begin
+   Result := (FExternalName <> '');
+end;
+
 function TSymbol.BaseType: TTypeSymbol;
 begin
   Result := nil;
@@ -2717,15 +2742,6 @@ procedure TSymbol.SetName(const newName : String; force : Boolean = False);
 begin
    Assert(force or (FName=''));
    FName:=newName;
-end;
-
-// SafeGetCaption
-//
-function TSymbol.SafeGetCaption : String;
-begin
-   if Self=nil then
-      Result:=SYS_VOID
-   else Result:=GetCaption;
 end;
 
 // ------------------
@@ -2855,13 +2871,6 @@ end;
 function TCompositeTypeSymbol.GetIsExternalRooted : Boolean;
 begin
    Result:=IsExternal;
-end;
-
-// GetExternalName
-//
-function TCompositeTypeSymbol.GetExternalName : String;
-begin
-   Result:=Name;
 end;
 
 // GetIsPartial
@@ -3188,15 +3197,6 @@ begin
    Result:=False;
 end;
 
-// GetExternalName
-//
-function TStructuredTypeSymbol.GetExternalName : String;
-begin
-   if FExternalName='' then
-      Result:=Name
-   else Result:=FExternalName;
-end;
-
 // GetMetaSymbol
 //
 function TStructuredTypeSymbol.GetMetaSymbol : TStructuredTypeMetaSymbol;
@@ -3304,7 +3304,7 @@ begin
    if methSym.IsClassMethod then
       Result:=nil
    else begin
-      Result:=TVarParamSymbol.Create(SYS_SELF, Self);
+      Result := TVarParamSymbol.Create(SYS_SELF, Self, [ psoInternal ]);
       methSym.Params.AddSymbol(Result);
    end;
 end;
@@ -3394,7 +3394,7 @@ function TRecordSymbol.GetCaption : String;
 begin
    if Name = '' then
       Result := 'anonymous record'
-   else Result := 'record ' + Name;
+   else Result := Name;
 end;
 
 // GetDescription
@@ -3638,13 +3638,6 @@ begin
    Result:=(FVisibility>=aVisibility);
 end;
 
-// HasExternalName
-//
-function TFieldSymbol.HasExternalName : Boolean;
-begin
-   Result:=(FExternalName<>'');
-end;
-
 // InitData
 //
 procedure TFieldSymbol.InitData(const data : TData; structOffset : Integer);
@@ -3652,15 +3645,6 @@ begin
    if DefaultValue<>nil then
       DWSCopyData(DefaultValue, 0, data, structOffset+Offset, Typ.Size)
    else Typ.InitData(data, structOffset+Offset);
-end;
-
-// GetExternalName
-//
-function TFieldSymbol.GetExternalName : String;
-begin
-   if FExternalName='' then
-      Result:=Name
-   else Result:=FExternalName;
 end;
 
 // ------------------
@@ -3849,7 +3833,7 @@ begin
       end else begin
 
          if paramRec.IsVarParam then
-            paramSym := TVarParamSymbol.Create(paramRec.ParamName, typSym)
+            paramSym := TVarParamSymbol.Create(paramRec.ParamName, typSym, [])
          else if paramRec.IsConstParam then
             paramSym := CreateConstParamSymbol(paramRec.ParamName, typSym)
          else paramSym := TParamSymbol.Create(paramRec.ParamName, typSym, paramRec.Options);
@@ -4143,15 +4127,6 @@ begin
    Assert(False);
 end;
 
-// GetExternalName
-//
-function TFuncSymbol.GetExternalName : String;
-begin
-   if FExternalName='' then
-      Result:=Name
-   else Result:=FExternalName;
-end;
-
 // GetSourceSubExpr
 //
 function TFuncSymbol.GetSourceSubExpr(i : Integer) : TExprBase;
@@ -4254,10 +4229,10 @@ begin
 
    destination.FFlags := FFlags;
    if fsfExternal in FFlags then
-      if FExternalName <> '' then
-         destination.FExternalName := FExternalName
-      else destination.FExternalName := Name
-   else destination.FExternalName := FExternalName;
+      if HasExternalName then
+         destination.ExternalName := FExternalName
+      else destination.ExternalName := Name
+   else destination.ExternalName := FExternalName;
 
    destination.FExternalConvention := FExternalConvention;
 
@@ -4429,13 +4404,6 @@ procedure TFuncSymbol.ClearIsForwarded;
 begin
    Dispose(FForwardPosition);
    FForwardPosition:=nil;
-end;
-
-// HasExternalName
-//
-function TFuncSymbol.HasExternalName : Boolean;
-begin
-   Result:=(FExternalName<>'');
 end;
 
 // ------------------
@@ -4961,15 +4929,6 @@ begin
    Result:=(FDeprecatedMessage<>'');
 end;
 
-// GetExternalName
-//
-function TPropertySymbol.GetExternalName : String;
-begin
-   if FExternalName <> '' then
-      Result := FExternalName
-   else Result := Name;
-end;
-
 procedure TPropertySymbol.GenerateParams(Table: TSymbolTable; const FuncParams: TParamArray);
 begin
    dwsSymbols.GenerateParams(Table, FuncParams, AddParam);
@@ -5062,16 +5021,20 @@ end;
 //
 function TPropertySymbol.GetDescription : String;
 begin
-   Result := Format('property %s%s: %s', [Name, GetArrayIndicesDescription, Typ.Name]);
+   Result := 'property ' + Name + GetArrayIndicesDescription + ': ' + Typ.Caption;
 
    if Assigned(FIndexSym) then
       Result := Result + ' index ' + VariantToString(FIndexValue[0]);
 
    if Assigned(FReadSym) then
-      Result := Result + ' read ' + FReadSym.Name;
+      if FReadSym.Name <> '' then
+         Result := Result + ' read ' + FReadSym.Name
+      else Result := Result + ' read';
 
    if Assigned(FWriteSym) then
-      Result := Result + ' write ' + FWriteSym.Name;
+      if FWriteSym.Name <> '' then
+         Result := Result + ' write ' + FWriteSym.Name
+      else Result := Result + ' write';
 
    if IsDefault then
       Result := Result + '; default;';
@@ -6180,7 +6143,7 @@ var
    ct : TClass;
 begin
    if typSym<>nil then begin
-      typSym:=typSym.UnAliasedType;
+      typSym:=typSym.GetUnAliasedType;
       if typSym.InheritsFrom(TBaseSymbol) then
          Result:=True
       else begin
@@ -6324,28 +6287,12 @@ begin
   else Result:=Name+': ???';
 end;
 
-// GetExternalName
-//
-function TDataSymbol.GetExternalName : String;
-begin
-   if FExternalName = '' then
-      Result := Name
-   else Result := FExternalName;
-end;
-
 // AllocateStackAddr
 //
 procedure TDataSymbol.AllocateStackAddr(generator : TAddrGenerator);
 begin
    FLevel := generator.Level;
    FStackAddr := generator.GetStackAddr(Size);
-end;
-
-// HasExternalName
-//
-function TDataSymbol.HasExternalName : Boolean;
-begin
-   Result := (FExternalName <> '');
 end;
 
 // IsWritable
@@ -6421,6 +6368,13 @@ end;
 function TParamSymbol.ForbidImplicitCasts : Boolean;
 begin
    Result := psoForbidImplicitCasts in FOptions;
+end;
+
+// IsInternal
+//
+function TParamSymbol.IsInternal : Boolean;
+begin
+   Result := psoInternal in FOptions;
 end;
 
 // Clone
@@ -6507,9 +6461,9 @@ end;
 // ------------------ TByRefParamSymbol ------------------
 // ------------------
 
-constructor TByRefParamSymbol.Create(const Name: String; Typ: TTypeSymbol);
+constructor TByRefParamSymbol.Create(const aName : String; aTyp : TTypeSymbol; const options : TParamSymbolOptions);
 begin
-  inherited Create(Name, Typ);
+  inherited Create(aName, aTyp, options);
   FSize := 1;
 end;
 
@@ -6517,14 +6471,14 @@ end;
 //
 function TByRefParamSymbol.Clone : TParamSymbol;
 begin
-   Result:=TByRefParamSymbol.Create(Name, Typ);
+   Result:=TByRefParamSymbol.Create(Name, Typ, FOptions);
 end;
 
 // Specialize
 //
 function TByRefParamSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
 begin
-   Result := TByRefParamSymbol.Create(Name, context.SpecializeType(Typ));
+   Result := TByRefParamSymbol.Create(Name, context.SpecializeType(Typ), FOptions);
 end;
 
 // ------------------
@@ -6560,14 +6514,14 @@ end;
 //
 function TConstByRefParamSymbol.Clone : TParamSymbol;
 begin
-   Result := TConstByRefParamSymbol.Create(Name, Typ);
+   Result := TConstByRefParamSymbol.Create(Name, Typ, FOptions);
 end;
 
 // Specialize
 //
 function TConstByRefParamSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
 begin
-   Result := TConstByRefParamSymbol.Create(Name, context.SpecializeType(Typ));
+   Result := TConstByRefParamSymbol.Create(Name, context.SpecializeType(Typ), FOptions);
 end;
 
 // IsWritable
@@ -6624,14 +6578,14 @@ end;
 //
 function TVarParamSymbol.Clone : TParamSymbol;
 begin
-   Result:=TVarParamSymbol.Create(Name, Typ);
+   Result:=TVarParamSymbol.Create(Name, Typ, FOptions);
 end;
 
 // Specialize
 //
 function TVarParamSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
 begin
-   Result := TVarParamSymbol.Create(Name, context.SpecializeType(Typ));
+   Result := TVarParamSymbol.Create(Name, context.SpecializeType(Typ), FOptions);
 end;
 
 // Semantics
@@ -7003,8 +6957,8 @@ begin
    rightType:=anOpSym.Params[1];
    if (leftType=nil) or (rightType=nil) then Exit;
 
-   leftType:=leftType.UnAliasedType;
-   rightType:=rightType.UnAliasedType;
+   leftType:=leftType.GetUnAliasedType;
+   rightType:=rightType.GetUnAliasedType;
    for i:=0 to Count-1 do begin
       sym:=Symbols[i];
       if sym=anOpSym then continue;
@@ -7429,7 +7383,7 @@ end;
 //
 function TSetOfSymbol.IsCompatible(typSym : TTypeSymbol) : Boolean;
 begin
-   typSym:=typSym.UnAliasedType;
+   typSym := typSym.UnAliasedType;
    if typSym is TSetOfSymbol then begin
       Result:=     TSetOfSymbol(typSym).Typ.IsOfType(Typ)
               and  (TSetOfSymbol(typSym).MinValue=MinValue)
@@ -7672,7 +7626,16 @@ end;
 //
 function TDynamicArraySymbol.GetCaption : String;
 begin
-   Result := 'array of '+Typ.Caption
+   if Name <> '' then
+      Result := Name
+   else Result := GetDescription;
+end;
+
+// GetDescription
+//
+function TDynamicArraySymbol.GetDescription : String;
+begin
+   Result := 'array of ' + Typ.Caption;
 end;
 
 // InitData
@@ -8188,6 +8151,25 @@ begin
            or BaseType.DoIsOfType(typSym);
 end;
 
+// InitializePseudoMethodSymbol
+//
+function TEnumerationSymbol.InitializePseudoMethodSymbol(methodKind : TArrayMethodKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol;
+var
+   methodName : String;
+begin
+   Result := nil;
+
+   methodName := Copy(GetEnumName(TypeInfo(TArrayMethodKind), Ord(methodKind)), 4);
+   case methodKind of
+      amkByName : begin
+         Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
+         Result.Params.AddSymbol(TParamSymbol.Create('name', Typ));
+      end;
+   end;
+   if Result <> nil then
+      FPseudoMethods[methodKind] := Result
+end;
+
 // AddElement
 //
 procedure TEnumerationSymbol.AddElement(element : TElementSymbol);
@@ -8221,6 +8203,13 @@ begin
       end;
    end;
    Result:=nil;
+end;
+
+// ElementByName
+//
+function TEnumerationSymbol.ElementByName(const name : String) : TElementSymbol;
+begin
+   Result := TElementSymbol(Elements.FindLocal(name));
 end;
 
 // GetCaption
@@ -8269,9 +8258,9 @@ begin
    Result:=Typ.BaseType;
 end;
 
-// UnAliasedType
+// GetUnAliasedType
 //
-function TAliasSymbol.UnAliasedType : TTypeSymbol;
+function TAliasSymbol.GetUnAliasedType : TTypeSymbol;
 begin
    Result:=Typ.UnAliasedType;
 end;
@@ -8325,6 +8314,15 @@ begin
    Result := Name + ' = ' + Typ.Name;
 end;
 
+// GetCaption
+//
+function TAliasSymbol.GetCaption : String;
+begin
+   if Name <> '' then
+      Result := Name
+   else Result := Typ.Caption;
+end;
+
 // ------------------
 // ------------------ TTypeSymbol ------------------
 // ------------------
@@ -8336,18 +8334,27 @@ begin
    Result:=Self;
 end;
 
-// UnAliasedType
+// GetUnAliasedType
 //
-function TTypeSymbol.UnAliasedType : TTypeSymbol;
+function TTypeSymbol.GetUnAliasedType : TTypeSymbol;
 begin
    Result:=Self;
+end;
+
+// UnaliasedType
+//
+function TTypeSymbol.UnaliasedType : TTypeSymbol;
+begin
+   if Self = nil then
+      Result := nil
+   else Result := GetUnAliasedType;
 end;
 
 // UnAliasedTypeIs
 //
 function TTypeSymbol.UnAliasedTypeIs(const typeSymbolClass : TTypeSymbolClass) : Boolean;
 begin
-   Result:=(Self<>nil) and UnAliasedType.InheritsFrom(typeSymbolClass);
+   Result:=(Self<>nil) and GetUnAliasedType.InheritsFrom(typeSymbolClass);
 end;
 
 // IsOfType

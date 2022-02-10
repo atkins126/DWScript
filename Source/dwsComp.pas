@@ -1077,10 +1077,10 @@ type
    TdwsElement = class(TdwsSymbol)
       private
          FIsUserDef: Boolean;
-         FUserDefValue: Integer;
+         FUserDefValue: Int64;
          FDeprecated : String;
 
-         procedure SetUserDefValue(const Value: Integer);
+         procedure SetUserDefValue(const Value: Int64);
          procedure SetIsUserDef(const Value: Boolean);
 
      protected
@@ -1092,7 +1092,7 @@ type
                              ParentSym: TSymbol = nil): TSymbol; override;
 
       published
-         property UserDefValue : Integer read FUserDefValue write SetUserDefValue default 0;
+         property UserDefValue : Int64 read FUserDefValue write SetUserDefValue default 0;
          property IsUserDef : Boolean read FIsUserDef write SetIsUserDef default False;
          property Deprecated : String read FDeprecated write FDeprecated;
    end;
@@ -3663,18 +3663,18 @@ begin
 
    if ResultType='' then begin
       func:=TCustomInternalMagicProcedure.Create(table, Name, GetParameters(systemTable, table),
-                                                 ResultType, flags, nil, '');
+                                                 ResultType, flags, nil, '', '');
       TCustomInternalMagicProcedure(func).FOnFastEval:=FOnFastEval;
    end else begin
       resType:=GetDataType(systemTable, table, ResultType);
       if resType.Size<>1 then begin
          func:=TCustomInternalMagicDataFunction.Create(table, Name, GetParameters(systemTable, table),
-                                                       ResultType, flags, nil, '');
+                                                       ResultType, flags, nil, '', '');
          TCustomInternalMagicDataFunction(func).FOnFastEval:=FOnFastEval;
          TCustomInternalMagicDataFunction(func).FSize:=resType.Size;
       end else begin
          func:=TCustomInternalMagicFunction.Create(table, Name, GetParameters(systemTable, table),
-                                                   ResultType, flags, nil, '');
+                                                   ResultType, flags, nil, '', '');
          TCustomInternalMagicFunction(func).FOnFastEval:=FOnFastEval;
       end;
    end;
@@ -5559,7 +5559,7 @@ end;
 function TdwsElement.DoGenerate(systemTable : TSystemSymbolTable; Table: TSymbolTable;
   ParentSym: TSymbol): TSymbol;
 var
-   enumInt: Integer;
+   enumInt: Int64;
    enumSym: TEnumerationSymbol;
 begin
    FIsGenerating := True;
@@ -5607,7 +5607,7 @@ begin
     FUserDefValue := 0;
 end;
 
-procedure TdwsElement.SetUserDefValue(const Value: Integer);
+procedure TdwsElement.SetUserDefValue(const Value: Int64);
 begin
   FIsUserDef := True;
   FUserDefValue := Value;
@@ -5722,8 +5722,8 @@ end;
 function TdwsFunctions.Add(const name : String; const resultType : String = '') : TdwsFunction;
 begin
    Result:=Add;
-   Result.Name:=name;
    Result.ResultType:=resultType;
+   Result.Name:=name;
 end;
 
 { TdwsForwards }

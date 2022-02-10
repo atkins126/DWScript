@@ -926,6 +926,7 @@ type
          procedure ClearArgs;
          function ExpectedArg : TParamSymbol; virtual; abstract;
          function GetArgType(idx : Integer) : TTypeSymbol;
+         function ArgIsOfType(idx : Integer; aTyp : TTypeSymbol) : Boolean;
          function Optimize(context : TdwsCompilerContext) : TProgramExpr; override;
          procedure CompileTimeCheck(context : TdwsCompilerContext); virtual;
 
@@ -4703,6 +4704,16 @@ begin
    end else Result:=nil;
 end;
 
+// ArgIsOfType
+//
+function TFuncExprBase.ArgIsOfType(idx : Integer; aTyp : TTypeSymbol) : Boolean;
+var
+   argTyp : TTypeSymbol;
+begin
+   argTyp := GetArgType(idx);
+   Result := (argTyp <> nil) and argTyp.IsOfType(aTyp);
+end;
+
 // ------------------
 // ------------------ TPushOperator ------------------
 // ------------------
@@ -7461,7 +7472,7 @@ begin
    if elemTyp <> nil then begin
       size := elemTyp.Size;
       ct := elemTyp.UnAliasedType.ClassType;
-      Result.FCreateKeyOnAccess := (ct = TDynamicArraySymbol) or (ct = TAssociativeArraySymbol)
+      Result.FCreateKeyOnAccess := (ct = TDynamicArraySymbol) or (ct = TAssociativeArraySymbol) or (size > 1)
    end else size := 0;
    Result.FElementTyp := elemTyp;
    Result.FElementSize := size;
@@ -7620,7 +7631,6 @@ var
    i : Integer;
    hashCode : Cardinal;
    key : IDataContext;
-   buf : Variant;
 begin
    if FCreateKeyOnAccess then
       if FCount >= FGrowth then Grow;
@@ -7634,16 +7644,23 @@ begin
       end;
    end;
 
-   exec.DataContext_CreateEmpty(FElementSize, result);
-   FElementTyp.InitDataContext(result);
-
    if FCreateKeyOnAccess then begin
-      Assert(FElementSize = 1);
+
+      CreateOffset(i*FElementSize, result);
+      FElementTyp.InitDataContext(result);
+
       FHashCodes[i] := hashCode;
       key.CopyData(FKeys, i*FKeySize, FKeySize);
       Inc(FCount);
-      result.EvalAsVariant(0, buf);
-      AsVariant[i] := buf;
+
+//      result.EvalAsVariant(0, buf);
+//      AsVariant[i] := buf;
+
+   end else begin
+
+      exec.DataContext_CreateEmpty(FElementSize, result);
+      FElementTyp.InitDataContext(result);
+
    end;
 end;
 

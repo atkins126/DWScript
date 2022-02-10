@@ -72,6 +72,7 @@ type
 
    TBaseTypeVarExpr = class (TVarExpr)
       public
+         procedure AssignExpr(exec : TdwsExecution; Expr: TTypedExpr); override;
          procedure EvalAsVariant(exec : TdwsExecution; var Result : Variant); override;
          procedure EvalAsInterface(exec : TdwsExecution; var result : IUnknown); override;
    end;
@@ -1102,6 +1103,14 @@ type
          procedure EvalAsString(exec : TdwsExecution; var result : String); override;
    end;
 
+   // retrieve an enumeration element value by its name
+   TEnumerationElementByNameExpr = class (TUnaryOpIntExpr)
+      public
+         constructor Create(context : TdwsBaseSymbolsContext; const aScriptPos : TScriptPos;
+                            enumSymbol : TEnumerationSymbol; expr : TTypedExpr); reintroduce;
+         function EvalAsInteger(exec : TdwsExecution) : Int64; override;
+   end;
+
    // statement; statement; statement;
    TBlockExpr = class sealed (TBlockExprBase)
       private
@@ -1988,6 +1997,16 @@ end;
 // ------------------ TBaseTypeVarExpr ------------------
 // ------------------
 
+// AssignExpr
+//
+procedure TBaseTypeVarExpr.AssignExpr(exec : TdwsExecution; Expr: TTypedExpr);
+var
+   buf : Variant;
+begin
+   Expr.EvalAsVariant(exec, buf);
+   exec.Stack.WriteValue(exec.Stack.BasePointer + FStackAddr, buf);
+end;
+
 // EvalAsVariant
 //
 procedure TBaseTypeVarExpr.EvalAsVariant(exec : TdwsExecution; var Result : Variant);
@@ -2307,14 +2326,14 @@ end;
 //
 function TVarParentExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
 begin
-   Result:=exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr];
+   VariantToInt64(exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr], Result);
 end;
 
 // EvalAsFloat
 //
 function TVarParentExpr.EvalAsFloat(exec : TdwsExecution) : Double;
 begin
-   Result:=exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr];
+   Result := VariantToFloat(exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr]);
 end;
 
 // ------------------
@@ -3680,6 +3699,45 @@ begin
       Result:=element.QualifiedName
    else Result:=TEnumerationSymbol(Expr.Typ).Name+'.?';
 end;
+
+// ------------------
+// ------------------ TEnumerationElementByNameExpr ------------------
+// ------------------
+
+// Create
+//
+constructor TEnumerationElementByNameExpr.Create(
+   context : TdwsBaseSymbolsContext; const aScriptPos : TScriptPos;
+   enumSymbol : TEnumerationSymbol; expr : TTypedExpr);
+begin
+   inherited Create(context, aScriptPos, expr);
+   Typ := enumSymbol;
+end;
+
+// EvalAsInteger
+//
+function TEnumerationElementByNameExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
+var
+   enumSymbol : TEnumerationSymbol;
+   elementSymbol : TElementSymbol;
+   name : String;
+   p : Integer;
+begin
+   enumSymbol := TEnumerationSymbol(Typ);
+   Expr.EvalAsString(exec, name);
+   p := StrIndexOfChar(name, '.');
+   if p > 0 then begin
+      Dec(p);
+      if (Length(enumSymbol.Name) <> p) or (UnicodeCompareLen(PChar(enumSymbol.Name), PChar(name), p) <> 0) then
+         Exit(0);
+      name := Copy(name, p+2);
+   end;
+   elementSymbol := enumSymbol.ElementByName(name);
+   if elementSymbol <> nil then
+      Result := elementSymbol.Value
+   else Result := 0;
+end;
+
 
 // ------------------
 // ------------------ TAssertExpr ------------------
@@ -6696,7 +6754,7 @@ var
    buf : Variant;
 begin
    FCompareExpr.EvalAsVariant(exec, buf);
-   Result:=(buf=value);
+   Result := VarCompareSafe(buf, value) = vrEqual;
 end;
 
 // StringIsTrue
@@ -6770,8 +6828,21 @@ end;
 // IsTrue
 //
 function TCompareConstStringCaseCondition.IsTrue(exec : TdwsExecution; const value : Variant) : Boolean;
+
+   function Fallback : Boolean;
+   begin
+      if VariantIsString(value) then
+         Result := (value = FValue)
+      else Result := VarCompareSafe(value, FValue) = vrEqual;
+   end;
+
 begin
-   Result := VariantIsString(value) and (value = FValue);
+   case VarType(value) of
+      varUString :
+         Result := UnicodeString(TVarData(value).VUString) = FValue;
+   else
+      Result := Fallback;
+   end;
 end;
 
 // StringIsTrue

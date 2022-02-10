@@ -5017,6 +5017,26 @@ end;
 //
 function TdwsCompiler.ReadEnumerationSymbolName(const enumPos : TScriptPos; enumSym : TEnumerationSymbol;
                                                 acceptTypeRef : Boolean) : TProgramExpr;
+
+   function ReadByName(const elemPos : TScriptPos) : TTypedExpr;
+   var
+      nameExpr : TTypedExpr;
+      namePos : TScriptPos;
+   begin
+      namePos := FTok.CurrentPos;
+      nameExpr := ReadBracket(FCompilerContext.TypString);
+      if (nameExpr = nil) or (nameExpr.Typ = nil) or not nameExpr.Typ.IsOfType(FCompilerContext.TypString) then begin
+         FMsgs.AddCompilerError(namePos, CPE_StringExpected);
+         // keep compiling
+         OrphanObject(nameExpr);
+         nameExpr := TConstStringExpr.Create(namePos, FCompilerContext.TypString, '');
+      end;
+      Result := TEnumerationElementByNameExpr.Create(
+         FCompilerContext, elemPos,
+         enumSym, nameExpr
+      );
+   end;
+
 var
    name : String;
    elemPos : TScriptPos;
@@ -5032,16 +5052,18 @@ begin
       if not FTok.TestDeleteNamePos(name, elemPos) then
          FMsgs.AddCompilerStop(FTok.HotPos, CPE_NameExpected);
       if FTok.TestDelete(ttBLEFT) then begin
-         if not FTok.TestDelete(ttBRIGHT) then
+         if UnicodeSameText(name, 'ByName') then begin
+            Exit(ReadByName(elemPos));
+         end else if not FTok.TestDelete(ttBRIGHT) then
             FMsgs.AddCompilerStop(FTok.HotPos, CPE_BrackRightExpected);
          elem:=nil;
       end else begin
          elem:=enumSym.Elements.FindLocal(name);
       end;
       if elem=nil then begin
-         if UnicodeSameText(name, 'low') then
+         if UnicodeSameText(name, 'Low') then
             Result := TConstIntExpr.Create(elemPos, enumSym, enumSym.LowBound)
-         else if UnicodeSameText(name, 'high') then
+         else if UnicodeSameText(name, 'High') then
             Result := TConstIntExpr.Create(elemPos, enumSym, enumSym.HighBound)
          else begin
             FMsgs.AddCompilerErrorFmt(elemPos, CPE_UnknownNameDotName, [enumSym.Name, name]);
@@ -5086,7 +5108,9 @@ begin
          convExpr:=TObjAsClassExpr.Create(FCompilerContext, namePos, operandExpr, baseType);
          if operandExpr<>nil then begin
             castedExprTyp:=operandExpr.Typ;
-            if castedExprTyp<>FCompilerContext.TypNil then begin
+            if castedExprTyp <> FCompilerContext.TypNil then begin
+               if castedExprTyp <> nil then
+                  castedExprTyp := castedExprTyp.UnAliasedType;
                if    (not (castedExprTyp is TClassSymbol))
                   or (
                             (not TClassSymbol(castedExprTyp).IsOfType(baseType))
@@ -5162,7 +5186,10 @@ var
 begin
    if codeExpr=nil then Exit(nil);
    codeExprTyp:=codeExpr.Typ;
-   if codeExprTyp=nil then Exit(nil);
+   if codeExprTyp=nil then begin
+      OrphanObject(codeExpr);
+      Exit(nil);
+   end;
 
    funcSym:=codeExprTyp.AsFuncSymbol;
    if funcSym<>nil then begin
@@ -5174,9 +5201,9 @@ begin
       else if not funcSym.IsOverloaded then
          Result := ReadFunc(funcSym, codeExpr, expecting)
       else begin
+         OrphanObject(codeExpr);
          FMsgs.AddCompilerStopFmt(codeExpr.ScriptPos, CPH_AmbiguousMatchingOverloadsForCall, [ funcSym.Name ]);
-         Result := codeExpr;
-         // Result:=ReadFuncOverloaded(funcSym, fromTable, varExpr, expecting)
+         Result := nil;
       end;
    end else Result:=codeExpr;
 
@@ -5429,7 +5456,9 @@ begin
                   FMsgs.AddCompilerError(FTok.HotPos, CPE_ObjectReferenceExpected);
                   OrphanAndNil(expr);
                end;
-               Result:=TReadOnlyFieldExpr.Create(FTok.HotPos, TFieldSymbol(sym), expr, propertySym.Typ);
+               if propertySym.OwnerSymbol is TRecordSymbol then
+                  Result := TRecordExpr.Create(FTok.HotPos, expr as TDataExpr, TFieldSymbol(sym))
+               else Result := TReadOnlyFieldExpr.Create(FTok.HotPos, TFieldSymbol(sym), expr, propertySym.Typ);
                expr:=nil;
 
             end else if sym is TClassVarSymbol then begin
@@ -5540,8 +5569,8 @@ begin
             ttDOT : begin
 
                FTok.KillToken;
-               Result:=nil;
-               Result:=ReadSymbolMemberExpr(expr, isWrite, expecting);
+               Result := nil;
+               Result := ReadSymbolMemberExpr(expr, isWrite, expecting);
 
             end;
             ttALEFT : begin
@@ -5842,6 +5871,12 @@ begin
             baseType := expr.BaseType
          else baseType := nil;
 
+         if baseType = nil then begin
+            OrphanAndNil(expr);
+            ReportNoMemberForType(name, namePos, baseType);
+            Exit;
+         end;
+
          if (baseType<>nil) and FCompilerContext.HelperMemberNames.Contains(name) then begin
             helperExpr:=ReadTypeHelper(expr as TTypedExpr,
                                        name, namePos, expecting, isWrite, False);
@@ -5855,12 +5890,10 @@ begin
          end;
          Result:=expr;
 
-         if baseType = nil then
-
-            ReportNoMemberForType(name, namePos, baseType)
+         baseType := baseType.UnAliasedType;
 
          // Class, record, intf
-         else if baseType.InheritsFrom(TStructuredTypeSymbol) then begin
+         if baseType.InheritsFrom(TStructuredTypeSymbol) then begin
 
             if (baseType is TRecordSymbol) and (Result is TFuncExpr) then
                TFuncExpr(Result).InitializeResultAddr(CurrentProg);
@@ -6701,6 +6734,8 @@ begin
 
          while not FTok.TestDelete(ttEND) do begin
             if FTok.TestDelete(ttELSE) then begin
+               if FTok.Test(ttBEGIN) then
+                  FMsgs.AddCompilerHint(FTok.HotPos, CPH_BeginInCaseOfElseClause, hlPedantic);
                Result.ElseExpr := ReadBlocks([ttEND], tt);
                break;
             end else begin
@@ -9776,7 +9811,7 @@ begin
       meth:=propSym.OwnerSymbol.CreateAnonymousMethod(fkProcedure, cvPrivate, classProperty);
 
       meth.AddParams(propSym.ArrayIndices);
-      paramSymbol := CreateConstParamSymbol('Value', propSym.Typ);
+      paramSymbol := CreateConstParamSymbol('Value', propSym.Typ, [ psoInternal ]);
       meth.Params.AddSymbol(paramSymbol);
 
       propSym.OwnerSymbol.AddMethod(meth);
@@ -10766,6 +10801,7 @@ function TdwsCompiler.ReadExpr(expecting : TTypeSymbol = nil) : TTypedExpr;
 var
    right : TTypedExpr;
    rightTyp : TTypeSymbol;
+   resultTyp : TTypeSymbol;
    tt : TTokenType;
    hotPos : TScriptPos;
    opExpr : TTypedExpr;
@@ -10835,26 +10871,27 @@ begin
                else
                   opExpr := CreateTypedOperatorExpr(tt, hotPos, Result, right);
                   if opExpr = nil then begin
+                     resultTyp := Result.Typ.UnAliasedType;
                      if     (tt in [ ttEQ, ttNOT_EQ, ttEQ_EQ, ttEXCL_EQ ])
                         and (rightTyp<>nil)
                         and (
-                                (Result.Typ is TClassSymbol)
-                             or (Result.Typ is TInterfaceSymbol)
-                             or (Result.Typ is TClassOfSymbol)
-                             or (Result.Typ=FCompilerContext.TypNil)
+                                (resultTyp is TClassSymbol)
+                             or (resultTyp is TInterfaceSymbol)
+                             or (resultTyp is TClassOfSymbol)
+                             or (resultTyp=FCompilerContext.TypNil)
                              ) then begin
                         if not ((rightTyp.ClassType=Result.Typ.ClassType) or (rightTyp=FCompilerContext.TypNil)) then begin
-                           if Result.Typ is TClassSymbol then
+                           if resultTyp is TClassSymbol then
                               FMsgs.AddCompilerError(hotPos, CPE_ObjectExpected)
-                           else if Result.Typ is TClassOfSymbol then
+                           else if resultTyp is TClassOfSymbol then
                               FMsgs.AddCompilerError(hotPos, CPE_ClassRefExpected)
                            else FMsgs.AddCompilerError(hotPos, CPE_InterfaceExpected);
                         end;
-                        if Result.Typ is TClassSymbol then
+                        if resultTyp is TClassSymbol then
                            if tt in [ ttNOT_EQ, ttEXCL_EQ ] then
                               Result:=TObjCmpNotEqualExpr.Create(FCompilerContext, hotPos, tt, Result, right)
                            else Result:=TObjCmpEqualExpr.Create(FCompilerContext, hotPos, tt, Result, right)
-                        else if Result.Typ is TClassOfSymbol then begin
+                        else if resultTyp is TClassOfSymbol then begin
                            Result:=TAssignedMetaClassExpr.Create(FCompilerContext, hotPos, Result);
                            if tt=ttEQ then
                               Result:=TNotBoolExpr.Create(FCompilerContext, hotPos, Result);
@@ -10866,7 +10903,7 @@ begin
                         end;
                      end else if     (tt in [ ttEQ, ttNOT_EQ, ttEQ_EQ, ttEXCL_EQ ])
                                  and (rightTyp=FCompilerContext.TypNil)
-                                 and (Result.Typ.IsOfType(FCompilerContext.TypVariant)) then begin
+                                 and (resultTyp.IsOfType(FCompilerContext.TypVariant)) then begin
                         if tt in [ ttEQ, ttEQ_EQ ] then
                            Result:=TRelVarEqualNilExpr.Create(FCompilerContext, hotPos, Result)
                         else Result:=TRelVarNotEqualNilExpr.Create(FCompilerContext, hotPos, Result);
@@ -11929,10 +11966,10 @@ begin
             typSym:=ReadType('', tcParameter);
             for i:=0 to names.Count-1 do begin
                if isVarParam then
-                  ArrayIndices.AddSymbol(TVarParamSymbol.Create(names[i], typSym))
+                  ArrayIndices.AddSymbol(TVarParamSymbol.Create(names[i], typSym, []))
                else if isConstParam then
                   ArrayIndices.AddSymbol(CreateConstParamSymbol(names[i], typSym))
-               else ArrayIndices.AddSymbol(TParamSymbol.Create(names[i], typSym));
+               else ArrayIndices.AddSymbol(TParamSymbol.Create(names[i], typSym, []));
             end;
          end;
       until not FTok.TestDelete(ttSEMI);
@@ -11966,7 +12003,7 @@ procedure TdwsCompiler.ReadParams(const hasParamMeth : THasParamSymbolMethod;
          pssLazy :
             paramSym := TLazyParamSymbol.Create(curName, paramType);
          pssVar :
-            paramSym := TVarParamSymbol.Create(curName, paramType);
+            paramSym := TVarParamSymbol.Create(curName, paramType, []);
          pssConst :
             paramSym := CreateConstParamSymbol(curName, paramType);
       else

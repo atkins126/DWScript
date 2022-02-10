@@ -182,6 +182,9 @@ type
    IToVariant = interface
       ['{DE1A280D-5552-4F84-B557-957271D6EA62}']
       procedure ToVariant(var result : Variant);
+      function IsArray : Boolean;
+      function IsNumeric : Boolean;
+      function IsString : Boolean;
    end;
 
    // TVarRecArrayContainer
@@ -779,6 +782,7 @@ type
 
          property Count : Integer read FCount;
          property First : PItemT read FFirst;
+         property Last : PItemT read FLast;
    end;
 
 const
@@ -849,8 +853,8 @@ type
 
          function TailWord : Word;
 
-         function ToString : String; override; final;
-         function ToUnicodeString : UnicodeString;
+         function ToString : String; overload; override; final;
+         function ToUnicodeString : UnicodeString; inline;
          function ToUTF8String : RawByteString;
          function ToBytes : TBytes;
          function ToRawBytes : RawByteString;
@@ -859,6 +863,7 @@ type
 
          procedure StoreData(var buffer); overload;
          procedure StoreData(destStream : TStream); overload;
+         procedure StoreData(var dest : UnicodeString); overload;
          procedure StoreUTF8Data(destStream : TStream); overload;
    end;
 
@@ -2212,6 +2217,19 @@ procedure VariantToString(const v : Variant; var s : String);
       Result := FloatToStr(v);
    end;
 
+   procedure VariantArrayToString(const v : Variant; var Result : String);
+   var
+      i : Integer;
+   begin
+      Result := '';
+      for i := VarArrayLowBound(v, 1) to VarArrayHighBound(v, 1) do begin
+         if Result <> '' then
+            Result := Result + ', ';
+         Result := Result + VariantToString(v[i]);
+      end;
+      Result := '[ ' + Result + ' ]';
+   end;
+
 var
    varData : PVarData;
 begin
@@ -2241,7 +2259,9 @@ begin
       varError :
          s := '[varError]';
    else
-      s := v;
+      if VarIsArray(v) then
+         VariantArrayToString(v, s)
+      else s := v;
    end;
 end;
 
@@ -2534,43 +2554,6 @@ end;
 //
 function VarCompareSafe(const left, right : Variant) : TVariantRelationship;
 
-   function CompareUnknowns(const left, right : IUnknown) : TVariantRelationship;
-   var
-      intfLeft, intfRight : IToVariant;
-      varLeft, varRight : Variant;
-   begin
-      if left = right then
-         Result := vrEqual
-      else if     (left <> nil)  and (right <> nil)
-              and (left.QueryInterface(IToVariant, intfLeft)=0) and (right.QueryInterface(IToVariant, intfRight)=0) then begin
-         intfLeft.ToVariant(varLeft);
-         intfRight.ToVariant(varRight);
-         Result := VarCompareSafe(varLeft, varRight);
-      end else Result := vrNotEqual;
-   end;
-
-   function CompareUnknownToVar(const left : IUnknown; const right : Variant) : TVariantRelationship;
-   var
-      intfLeft : IToVariant;
-      varLeft : Variant;
-   begin
-      if (left <> nil) and (left.QueryInterface(IToVariant, intfLeft)=0) then begin
-         intfLeft.ToVariant(varLeft);
-         Result := VarCompareSafe(varLeft, right);
-      end else Result := vrNotEqual;
-   end;
-
-   function CompareVarToUnknown(const left : Variant; const right : IUnknown) : TVariantRelationship;
-   var
-      intfRight : IToVariant;
-      varRight : Variant;
-   begin
-      if (right <> nil) and (right.QueryInterface(IToVariant, intfRight)=0) then begin
-         intfRight.ToVariant(varRight);
-         Result := VarCompareSafe(left, varRight);
-      end else Result := vrNotEqual;
-   end;
-
    function CompareStrings(const left, right : String) : TVariantRelationship;
    var
       c : Integer;
@@ -2639,6 +2622,69 @@ function VarCompareSafe(const left, right : Variant) : TVariantRelationship;
       else Result := CompareStringToDouble(left, right);
    end;
 
+   function CompareUnknowns(const left, right : IUnknown) : TVariantRelationship;
+   var
+      intfLeft, intfRight : IToVariant;
+      varLeft, varRight : Variant;
+   begin
+      if left = right then
+         Result := vrEqual
+      else if     (left <> nil)  and (right <> nil)
+              and (left.QueryInterface(IToVariant, intfLeft)=0) and (right.QueryInterface(IToVariant, intfRight)=0) then begin
+         intfLeft.ToVariant(varLeft);
+         intfRight.ToVariant(varRight);
+         Result := VarCompareSafe(varLeft, varRight);
+      end else Result := vrNotEqual;
+   end;
+
+   function CompareUnknownToVar(const left : IUnknown; const right : Variant) : TVariantRelationship;
+   var
+      intfLeft : IToVariant;
+      varLeft : Variant;
+   begin
+      if (left <> nil) and (left.QueryInterface(IToVariant, intfLeft)=0) then begin
+         intfLeft.ToVariant(varLeft);
+         Result := VarCompareSafe(varLeft, right);
+      end else Result := vrNotEqual;
+   end;
+
+   function CompareInt64ToUnknown(const left : Int64; const right : IUnknown) : TVariantRelationship; forward;
+
+   function CompareInt64ToVar(const left : Int64; const right : Variant) : TVariantRelationship;
+   begin
+      case VarType(right) of
+         varDouble : Exit(CompareDoubles(left, TVarData(right).VDouble));
+         varInt64 : Exit(CompareInt64s(left, TVarData(right).VInt64));
+         varUString : Exit(CompareInt64ToString(left, String(TVarData(right).VUString)));
+         varUnknown : Exit(CompareInt64ToUnknown(left, IUnknown(TVarData(right).VUnknown)));
+      end;
+      if VarIsArray(right) then
+         Exit(vrNotEqual)
+      else Exit(VarCompareValue(left, right));
+   end;
+
+   function CompareInt64ToUnknown(const left : Int64; const right : IUnknown) : TVariantRelationship;
+   var
+      intfRight : IToVariant;
+      varRight : Variant;
+   begin
+      if (right <> nil) and (right.QueryInterface(IToVariant, intfRight)=0) then begin
+         intfRight.ToVariant(varRight);
+         Result := CompareInt64ToVar(left, varRight);
+      end else Result := vrNotEqual;
+   end;
+
+   function CompareVarToUnknown(const left : Variant; const right : IUnknown) : TVariantRelationship;
+   var
+      intfRight : IToVariant;
+      varRight : Variant;
+   begin
+      if (right <> nil) and (right.QueryInterface(IToVariant, intfRight)=0) then begin
+         intfRight.ToVariant(varRight);
+         Result := VarCompareSafe(left, varRight);
+      end else Result := vrNotEqual;
+   end;
+
 begin
    case VarType(left) of
       varUnknown : begin
@@ -2665,16 +2711,8 @@ begin
             Exit(vrNotEqual)
          else Exit(VarCompareValue(left, right));
       end;
-      varInt64 : begin
-         case VarType(right) of
-            varDouble : Exit(CompareDoubles(TVarData(left).VInt64, TVarData(right).VDouble));
-            varInt64 : Exit(CompareInt64s(TVarData(left).VInt64, TVarData(right).VInt64));
-            varUString : Exit(CompareInt64ToString(TVarData(left).VInt64, String(TVarData(right).VUString)));
-         end;
-         if VarIsArray(right) then
-            Exit(vrNotEqual)
-         else Exit(VarCompareValue(left, right));
-      end;
+      varInt64 :
+         Exit(CompareInt64ToVar(TVarData(left).VInt64, right));
       varUString : begin
          case VarType(right) of
             varDouble : Exit(CompareStringToDouble(String(TVarData(left).VUString), TVarData(right).VDouble));
@@ -4986,6 +5024,19 @@ end;
 
 // StoreUTF8Data
 //
+procedure TWriteOnlyBlockStream.StoreData(var dest : UnicodeString);
+begin
+   if FTotalSize > 0 then begin
+
+      Assert((FTotalSize and 1) = 0);
+      SetLength(dest, FTotalSize div SizeOf(WideChar));
+      StoreData(Pointer(dest)^);
+
+   end else dest := '';
+end;
+
+// StoreUTF8Data
+//
 procedure TWriteOnlyBlockStream.StoreUTF8Data(destStream : TStream);
 var
    buf : UTF8String;
@@ -5056,35 +5107,35 @@ var
 begin
    Inc(FTotalSize, count);
 
-   fraction:=cWriteOnlyBlockStreamBlockSize-FBlockRemaining^;
-   if count>fraction then begin
+   fraction := cWriteOnlyBlockStreamBlockSize-FBlockRemaining^;
+   if count > fraction then begin
       // does not fit in current block
       // was current block started?
-      if FBlockRemaining^>0 then begin
+      if FBlockRemaining^ > 0 then begin
          WriteSpanning(source, fraction);
          Dec(count, fraction);
-         source:=@source[fraction];
+         source := @source[fraction];
       end;
-      if count>cWriteOnlyBlockStreamBlockSize div 2 then begin
+      if count > cWriteOnlyBlockStreamBlockSize div 2 then begin
          WriteLarge(source, count);
          Exit;
       end;
    end;
 
    // if we reach here, everything fits in current block
-   dest:=@PByteArray(@FCurrentBlock[2])[FBlockRemaining^];
+   dest := @PByteArray(@FCurrentBlock[2])[FBlockRemaining^];
    Inc(FBlockRemaining^, count);
    {$ifdef WIN32}
    case Cardinal(count) of
       0 : ;
-      1 : dest[0]:=source[0];
-      2 : PWord(dest)^:=PWord(source)^;
-      3 : PThreeBytes(dest)^:=PThreeBytes(source)^;
-      4 : PCardinal(dest)^:=PCardinal(source)^;
-      5 : PFiveBytes(dest)^:=PFiveBytes(source)^;
-      6 : PSixBytes(dest)^:=PSixBytes(source)^;
-      7 : PSevenBytes(dest)^:=PSevenBytes(source)^;
-      8 : PInt64(dest)^:=PInt64(source)^;
+      1 : dest[0] := source[0];
+      2 : PWord(dest)^ := PWord(source)^;
+      3 : PThreeBytes(dest)^ := PThreeBytes(source)^;
+      4 : PCardinal(dest)^ := PCardinal(source)^;
+      5 : PFiveBytes(dest)^ := PFiveBytes(source)^;
+      6 : PSixBytes(dest)^ := PSixBytes(source)^;
+      7 : PSevenBytes(dest)^ := PSevenBytes(source)^;
+      8 : PInt64(dest)^ := PInt64(source)^;
    else
       System.Move(source^, dest^, count);
    end;
@@ -5302,20 +5353,14 @@ end;
 //
 function TWriteOnlyBlockStream.ToString : String;
 begin
-   Result := String(ToUnicodeString);
+   StoreData(Result);
 end;
 
 // ToUnicodeString
 //
 function TWriteOnlyBlockStream.ToUnicodeString : UnicodeString;
 begin
-   if FTotalSize>0 then begin
-
-      Assert((FTotalSize and 1) = 0);
-      SetLength(Result, FTotalSize div SizeOf(WideChar));
-      StoreData(Result[1]);
-
-   end else Result:='';
+   StoreData(Result);
 end;
 
 // ToUTF8String

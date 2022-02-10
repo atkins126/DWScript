@@ -72,6 +72,7 @@ type
          procedure ImplementationSuggest;
          procedure ParameterSuggest;
          procedure FunctionCaptionDescription;
+         procedure PropertiesDescription;
    end;
 
 // ------------------------------------------------------------------
@@ -586,11 +587,12 @@ begin
    scriptPos:=TScriptPos.Create(prog.SourceList[0].SourceFile, 2, 7);
    sugg:=TdwsSuggestions.Create(prog, scriptPos, [soNoReservedWords]);
 
-   CheckEquals(4, sugg.Count, '.L');
+   CheckEquals(5, sugg.Count, '.L');
    CheckEquals('Left', sugg.Code[0], '.L 0');
    CheckEquals('Length', sugg.Code[1], '.L 1');
-   CheckEquals('Low', sugg.Code[2], '.L 2');
-   CheckEquals('LowerCase', sugg.Code[3], '.L 3');
+   CheckEquals('LocaleCompare', sugg.Code[2], '.L 2');
+   CheckEquals('Low', sugg.Code[3], '.L 3');
+   CheckEquals('LowerCase', sugg.Code[4], '.L 4');
 
    prog:=FCompiler.Compile('function T(i : Integer) : String; forward;'#13#10
                            +'T(Ord(IntToStr(1)[1]+"])([")).Le');
@@ -652,14 +654,14 @@ begin
                            +'T('#13#10
                            +'1'#13#10
                            +')'#13#10
-                           +'.LO');
+                           +'.LOW');
 
-   scriptPos:=TScriptPos.Create(prog.SourceList[0].SourceFile, 5, 4);
+   scriptPos:=TScriptPos.Create(prog.SourceList[0].SourceFile, 5, 5);
    sugg:=TdwsSuggestions.Create(prog, scriptPos, [soNoReservedWords]);
 
-   CheckEquals(2, sugg.Count, '.Lo');
-   CheckEquals('Low', sugg.Code[0], '.Lo 0');
-   CheckEquals('LowerCase', sugg.Code[1], '.L 1');
+   CheckEquals(2, sugg.Count, '.Low');
+   CheckEquals('Low', sugg.Code[0], '.Low 0');
+   CheckEquals('LowerCase', sugg.Code[1], '.Low 1');
 end;
 
 // ForVariable
@@ -812,8 +814,9 @@ begin
    scriptPos:=TScriptPos.Create(prog.SourceList[0].SourceFile, 2, 13);
 
    sugg:=TdwsSuggestions.Create(prog, scriptPos);
-   CheckEquals(1, sugg.Count, 'column 13');
-   CheckEquals('One', sugg.Code[0], 'sugg 2, 13, 0');
+   CheckEquals(2, sugg.Count, 'column 13');
+   CheckEquals('ByName', sugg.Code[0], 'sugg 2, 13, 0');
+   CheckEquals('One', sugg.Code[1], 'sugg 2, 13, 1');
 
    scriptPos:=TScriptPos.Create(prog.SourceList[0].SourceFile, 2, 18);
 
@@ -1194,6 +1197,39 @@ begin
                symClassFn.Caption, 'TestFC');
    CheckEquals('class function TestFC(a: array of TTest): array of String',
                symClassFn.Description, 'TestFC');
+end;
+
+// PropertiesDescription
+//
+procedure TSourceUtilsTests.PropertiesDescription;
+var
+   prog : IdwsProgram;
+   classSymMembers : TMembersSymbolTable;
+begin
+   prog := FCompiler.Compile(
+        'type TTestEnum = enum (Alpha = 0, Beta = 1, Gamma = 2, Unknown = -1);'#10
+      + 'type TStringArray = array of String;'#10
+      + 'type TNameValue = record'#10
+      + '   Name : String;'#10
+      + '   Value : String;'#10
+      + 'end;'#10
+      + 'type TMyClass = class'#10
+      + '   private'#10
+      + '      FField : array[String] of TTestEnum;'#10
+      + '   public'#10
+      + '      property Prop : array of TTestEnum;'#10
+      + '      property Keys : array of String read (FField.Keys);'#10
+      + '      property NameValue : TNameValue;'#10
+      + '      property StringTab : TStringArray;'#10
+      + 'end;'
+   );
+   CheckFalse(prog.Msgs.HasErrors, prog.Msgs.AsInfo);
+   classSymMembers := (prog.Table.FindLocal('TMyClass') as TClassSymbol).Members;
+
+   CheckEquals('property Prop: array of TTestEnum read write', classSymMembers.FindSymbol('Prop', cvMagic).Description, 'Test1');
+   CheckEquals('property Keys: array of String read', classSymMembers.FindSymbol('Keys', cvMagic).Description, 'Test2');
+   CheckEquals('property NameValue: TNameValue read write', classSymMembers.FindSymbol('NameValue', cvMagic).Description, 'Test3');
+   CheckEquals('property StringTab: TStringArray read write', classSymMembers.FindSymbol('StringTab', cvMagic).Description, 'Test4');
 end;
 
 // SuggestInBlockWithError

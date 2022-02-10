@@ -112,6 +112,14 @@ type
       function DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean; override;
    end;
 
+   TGlobalQueuePeekFunc = class(TInternalMagicBoolFunction)
+      function DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean; override;
+   end;
+
+   TGlobalQueueFirstFunc = class(TInternalMagicBoolFunction)
+      function DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean; override;
+   end;
+
    TGlobalQueueLengthFunc = class(TInternalMagicIntFunction)
       function DoEvalAsInteger(const args : TExprBaseListExec) : Int64; override;
    end;
@@ -186,6 +194,8 @@ function GlobalQueuePush(const aName : String; const aValue : Variant) : Integer
 function GlobalQueueInsert(const aName : String; const aValue : Variant) : Integer;
 function GlobalQueuePull(const aName : String; var aValue : Variant) : Boolean;
 function GlobalQueuePop(const aName : String; var aValue : Variant) : Boolean;
+function GlobalQueuePeek(const aName : String; var aValue : Variant) : Boolean;
+function GlobalQueueFirst(const aName : String; var aValue : Variant) : Boolean;
 function GlobalQueueLength(const aName : String) : Integer;
 procedure GlobalQueueSnapshot(const aName : String; const destination : IScriptDynArray);
 procedure CleanupGlobalQueues(const filter : String = '*');
@@ -253,7 +263,9 @@ procedure CastVariantForGlobalStorage(const varIn : Variant; var varOut : Varian
       named : IGetSelf;
       toVariant : IToVariant;
    begin
-      if IUnknown(TVarData(varIn).VUnknown).QueryInterface(IToVariant, toVariant) = S_OK then begin
+      if TVarData(varIn).VUnknown = nil then
+         VarSetNull(varOut)
+      else if IUnknown(TVarData(varIn).VUnknown).QueryInterface(IToVariant, toVariant) = S_OK then begin
          toVariant.ToVariant(varOut);
       end else begin
          if IUnknown(TVarData(varIn).VUnknown).QueryInterface(IGetSelf, named) = S_OK then
@@ -522,6 +534,42 @@ begin
       if gq<>nil then
          Result:=gq.Pop(aValue)
       else Result:=False;
+   finally
+      vGlobalQueuesCS.EndWrite;
+   end;
+end;
+
+// GlobalQueuePeek
+//
+function GlobalQueuePeek(const aName : String; var aValue : Variant) : Boolean;
+var
+   gq : TGlobalQueue;
+begin
+   vGlobalQueuesCS.BeginWrite;
+   try
+      gq:=vGlobalQueues.Objects[aName];
+      if (gq <> nil) and (gq.Count > 0)  then begin
+         aValue := gq.Last.Value;
+         Result := True;
+      end else Result := False;
+   finally
+      vGlobalQueuesCS.EndWrite;
+   end;
+end;
+
+// GlobalQueueFirst
+//
+function GlobalQueueFirst(const aName : String; var aValue : Variant) : Boolean;
+var
+   gq : TGlobalQueue;
+begin
+   vGlobalQueuesCS.BeginWrite;
+   try
+      gq:=vGlobalQueues.Objects[aName];
+      if (gq <> nil) and (gq.Count > 0)  then begin
+         aValue := gq.First.Value;
+         Result := True;
+      end else Result := False;
    finally
       vGlobalQueuesCS.EndWrite;
    end;
@@ -805,6 +853,36 @@ begin
 end;
 
 // ------------------
+// ------------------ TGlobalQueuePeekFunc ------------------
+// ------------------
+
+// DoEvalAsBoolean
+//
+function TGlobalQueuePeekFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
+var
+   v : Variant;
+begin
+   Result := GlobalQueuePeek(args.AsString[0], v);
+   if Result then
+      args.ExprBase[1].AssignValue(args.Exec, v);
+end;
+
+// ------------------
+// ------------------ TGlobalQueueFirstFunc ------------------
+// ------------------
+
+// DoEvalAsBoolean
+//
+function TGlobalQueueFirstFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
+var
+   v : Variant;
+begin
+   Result := GlobalQueueFirst(args.AsString[0], v);
+   if Result then
+      args.ExprBase[1].AssignValue(args.Exec, v);
+end;
+
+// ------------------
 // ------------------ TCleanupGlobalQueuesFunc ------------------
 // ------------------
 
@@ -958,6 +1036,8 @@ initialization
    RegisterInternalIntFunction(TGlobalQueueInsertFunc, 'GlobalQueueInsert', ['n', SYS_STRING, 'v', SYS_VARIANT]);
    RegisterInternalBoolFunction(TGlobalQueuePullFunc, 'GlobalQueuePull', ['n', SYS_STRING, '@v', SYS_VARIANT]);
    RegisterInternalBoolFunction(TGlobalQueuePopFunc, 'GlobalQueuePop', ['n', SYS_STRING, '@v', SYS_VARIANT]);
+   RegisterInternalBoolFunction(TGlobalQueuePeekFunc, 'GlobalQueuePeek', ['n', SYS_STRING, '@v', SYS_VARIANT]);
+   RegisterInternalBoolFunction(TGlobalQueueFirstFunc, 'GlobalQueueFirst', ['n', SYS_STRING, '@v', SYS_VARIANT]);
    RegisterInternalIntFunction(TGlobalQueueLengthFunc, 'GlobalQueueLength', ['n', SYS_STRING]);
    RegisterInternalFunction(TGlobalQueueSnapshotFunc, 'GlobalQueueSnapshot', ['n', SYS_STRING], SYS_ARRAY_OF_VARIANT);
    RegisterInternalProcedure(TCleanupGlobalQueuesFunc, 'CleanupGlobalQueues', ['filter=*', SYS_STRING]);
