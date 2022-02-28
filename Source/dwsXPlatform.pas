@@ -339,6 +339,7 @@ procedure BytesToScriptString(const p : PByteArray; n : Integer; var result : Un
 
 procedure WordsToBytes(src : PWordArray; dest : PByteArray; nbWords : Integer);
 procedure BytesToWords(src : PByteArray; dest : PWordArray; nbBytes : Integer);
+procedure BytesToWordsInPlace(p : Pointer; n : NativeInt);
 
 function LoadDataFromFile(const fileName : TFileName) : TBytes;
 procedure SaveDataToFile(const fileName : TFileName; const data : TBytes);
@@ -357,8 +358,10 @@ procedure AppendTextToUTF8File(const fileName : TFileName; const text : UTF8Stri
 function OpenFileForSequentialReadOnly(const fileName : TFileName) : THandle;
 function OpenFileForSequentialWriteOnly(const fileName : TFileName) : THandle;
 procedure CloseFileHandle(hFile : THandle);
-function FileWrite(hFile : THandle; buffer : Pointer; byteCount : Integer) : Cardinal;
+function FileWrite(hFile : THandle; buffer : Pointer; byteCount : Int64) : Int64;
+function FileRead(hFile : THandle; buffer : Pointer; byteCount : Int64) : Int64;
 function FileFlushBuffers(hFile : THandle) : Boolean;
+function SetEndOfFile(hFile : THandle) : Boolean;
 function FileCopy(const existing, new : TFileName; failIfExists : Boolean) : Boolean;
 function FileMove(const existing, new : TFileName) : Boolean;
 function FileDelete(const fileName : TFileName) : Boolean;
@@ -599,8 +602,17 @@ end;
 // UnixTime
 //
 function UnixTime : Int64;
+const
+   cUNIX_TIME_START : Int64 = $019DB1DED53E8000;
+   cTICKS_PER_SECOND : Int64 = 10000000;  // 100ns
+var
+   ft : FILETIME;
+   t : TdwsLargeInteger;
 begin
-   Result:=Trunc(UTCDateTime*86400)-Int64(25569)*86400;
+   GetSystemTimeAsFileTime(ft);
+   t.LowPart := ft.dwLowDateTime;
+   t.HighPart := ft.dwHighDateTime;
+   Result := (t.QuadPart - cUNIX_TIME_START) div cTICKS_PER_SECOND;
 end;
 
 {$IFNDEF LINUX}
@@ -1944,8 +1956,8 @@ asm  // p -> rcx     n -> rdx
    cmp         rdx, 16
    jb          @@lessthan16
 
-   mov         eax, edx
-   shr         eax, 4
+   mov         rax, rdx
+   shr         rax, 4
    and         rdx, 15
 
    pxor        xmm0, xmm0
@@ -1961,7 +1973,7 @@ asm  // p -> rcx     n -> rdx
    movdqu      [rcx], xmm1
    movdqu      [rcx+16], xmm2
 
-   dec         eax
+   sub         rax, 1
    jnz         @@loop16
 
 @@lessthan16:
@@ -1969,11 +1981,11 @@ asm  // p -> rcx     n -> rdx
    jz          @@end
 
 @@loop1:
-   dec         r8
+   sub         r8, 1
    sub         rcx, 2
-   mov         al, [r8]
+   movzx       ax, [r8]
    mov         [rcx], ax
-   dec         rdx
+   sub         rdx, 1
    jnz         @@loop1
 
 @@end:
@@ -2102,16 +2114,59 @@ end;
 
 // FileWrite
 //
-function FileWrite(hFile : THandle; buffer : Pointer; byteCount : Integer) : Cardinal;
+function FileWrite(hFile : THandle; buffer : Pointer; byteCount : Int64) : Int64;
+const
+   cOneGigabyte = 1024*1024*1024;
+var
+   bytesToWrite : Integer;
 begin
-   {$ifdef WINDOWS}
-   if not WriteFile(hFile, buffer^, byteCount, Result, nil) then
-      RaiseLastOSError;
-   {$else}
-   Result := SysUtils.FileWrite(hFile, buffer^, byteCount);
-   if Result = -1 then
-      raise Exception.Create('file write exception')
-   {$endif}
+   Result := 0;
+   while byteCount > 0 do begin
+      if byteCount > cOneGigabyte then
+         bytesToWrite := cOneGigabyte
+      else bytesToWrite := byteCount;
+      {$ifdef WINDOWS}
+      if not WriteFile(hFile, buffer^, bytesToWrite, Cardinal(bytesToWrite), nil) then
+         RaiseLastOSError;
+      {$else}
+      bytesToWrite := SysUtils.FileRead(hFile, buffer^, byteCount);
+      if bytesToWrite = -1 then
+         raise Exception.Create('file write exception')
+      {$endif}
+      Assert(bytesToWrite > 0);
+      Dec(byteCount, bytesToWrite);
+      Inc(IntPtr(buffer), bytesToWrite);
+      Inc(Result, bytesToWrite);
+   end;
+end;
+
+// FileRead
+//
+function FileRead(hFile : THandle; buffer : Pointer; byteCount : Int64) : Int64;
+const
+   cOneGigabyte = 1024*1024*1024;
+var
+   bytesToRead : Integer;
+begin
+   Result := 0;
+   while byteCount > 0 do begin
+      if byteCount > cOneGigabyte then
+         bytesToRead := cOneGigabyte
+      else bytesToRead := byteCount;
+      {$ifdef WINDOWS}
+      if not ReadFile(hFile, buffer^, bytesToRead, Cardinal(bytesToRead), nil) then
+         RaiseLastOSError;
+      {$else}
+      bytesToRead := SysUtils.FileWrite(hFile, buffer^, byteCount);
+      if bytesToRead = -1 then
+         raise Exception.Create('file read exception')
+      {$endif}
+      if bytesToRead > 0 then begin
+         Dec(byteCount, bytesToRead);
+         Inc(IntPtr(buffer), bytesToRead);
+         Inc(Result, bytesToRead);
+      end else Break;
+   end;
 end;
 
 // FileFlushBuffers
@@ -2128,6 +2183,13 @@ begin
    // TODO
 end;
 {$endif}
+
+// SetEndOfFile
+//
+function SetEndOfFile(hFile : THandle) : Boolean;
+begin
+   Result := Windows.SetEndOfFile(hFile);
+end;
 
 // FileCopy
 //
@@ -2165,7 +2227,7 @@ end;
 //
 function FileDelete(const fileName : TFileName) : Boolean;
 begin
-   Result:=SysUtils.DeleteFile(fileName);
+   Result := SysUtils.DeleteFile(fileName);
 end;
 
 // FileRename

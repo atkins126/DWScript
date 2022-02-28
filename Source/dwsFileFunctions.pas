@@ -35,9 +35,24 @@ const
 type
 
    IdwsFileHandle = interface
-      function GetHandle : THandle;
       function GetOSError : Integer;
-      procedure Clear;
+      function IsValid : Boolean;
+
+      function GetDateTime : TDateTime;
+      procedure SetDateTime(dt : TDateTime);
+
+      function Seek(offset : Int64; origin : Integer) : Int64;
+      function Size : Int64;
+      function Position : Int64;
+
+      function Read(buf : Pointer; nbBytes : Int64) : Int64;
+      function ReadBuffer(nbBytes : Int64; var dest : String) : Int64;
+      function Write(buf : Pointer; nbBytes : Int64) : Int64;
+
+      function FlushBuffers : Boolean;
+      function SetEndOfFile : Boolean;
+
+      procedure Close;
    end;
 
    TdwsFileHandle = class (TInterfacedSelfObject, IdwsFileHandle)
@@ -49,9 +64,24 @@ type
          constructor Create(aHandle : THandle; osError : Integer);
          destructor Destroy; override;
 
-         function GetHandle : THandle;
          function GetOSError : Integer;
-         procedure Clear;
+         function IsValid : Boolean;
+
+         function GetDateTime : TDateTime;
+         procedure SetDateTime(dt : TDateTime);
+
+         function Seek(offset : Int64; origin : Integer) : Int64;
+         function Size : Int64;
+         function Position : Int64;
+
+         function Read(buf : Pointer; nbBytes : Int64) : Int64;
+         function ReadBuffer(nbBytes : Int64; var dest : String) : Int64;
+         function Write(buf : Pointer; nbBytes : Int64) : Int64;
+
+         function FlushBuffers : Boolean;
+         function SetEndOfFile : Boolean;
+
+         procedure Close;
    end;
 
    TBaseFileSymbol = class (TBaseSymbol)
@@ -103,6 +133,10 @@ type
    end;
 
    TFileSeekFunc = class(TInternalMagicIntFunction)
+      function DoEvalAsInteger(const args : TExprBaseListExec) : Int64; override;
+   end;
+
+   TFilePositionFunc = class(TInternalMagicIntFunction)
       function DoEvalAsInteger(const args : TExprBaseListExec) : Int64; override;
    end;
 
@@ -211,7 +245,9 @@ type
       procedure DoEvalAsVariant(const args : TExprBaseListExec; var result : Variant); override;
    end;
 
-function GetIdwsFileHandle(const args : TExprBaseListExec; index : Integer; checkValidity : Boolean = True) : THandle;
+   EdwsFileException = class (Exception);
+
+function GetIdwsFileHandle(const args : TExprBaseListExec; index : Integer; checkValidity : Boolean = True) : IdwsFileHandle;
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -252,22 +288,26 @@ end;
 
 // GetIdwsFileHandle
 //
-function GetIdwsFileHandle(const args : TExprBaseListExec; index : Integer; checkValidity : Boolean = True) : THandle;
+function GetIdwsFileHandle(const args : TExprBaseListExec; index : Integer; checkValidity : Boolean = True) : IdwsFileHandle;
 var
-   ih : IdwsFileHandle;
    v : Variant;
+   osError : Integer;
 begin
    args.ExprBase[index].EvalAsVariant(args.Exec, v);
    if (TVarData(v).VType=varUnknown) and (TVarData(v).VUnknown<>nil) then begin
-      ih:=IdwsFileHandle(IUnknown(TVarData(v).VUnknown));
-      Result:=ih.GetHandle;
-      if checkValidity and (Result=INVALID_HANDLE_VALUE) then
-         raise Exception.CreateFmt('Invalid file handle (%d): %s',
-                                   [ih.GetOSError, SysErrorMessage(ih.GetOSError)]);
-   end else begin
-      if checkValidity then
-         raise Exception.Create('File is not open');
-      Result:=0;
+      Result := IdwsFileHandle(IUnknown(TVarData(v).VUnknown));
+   end else Result := nil;
+
+   if checkValidity then begin
+      if Result = nil then
+         raise EdwsFileException.Create('File is not open')
+      else if not Result.IsValid then begin
+         osError := Result.GetOSError;
+         if osError = 0 then
+            raise EdwsFileException.Create('File already closed')
+         else raise EdwsFileException.CreateFmt('Invalid file handle (%d): %s',
+                                        [ osError, SysErrorMessage(osError) ]);
+      end;
    end;
 end;
 
@@ -287,15 +327,8 @@ end;
 //
 destructor TdwsFileHandle.Destroy;
 begin
-   if FHandle<>0 then
+   if FHandle <> INVALID_HANDLE_VALUE then
       CloseFileHandle(FHandle);
-end;
-
-// GetHandle
-//
-function TdwsFileHandle.GetHandle : THandle;
-begin
-   Result:=FHandle;
 end;
 
 // GetOSError
@@ -305,12 +338,121 @@ begin
    Result:=FOSError;
 end;
 
-// Clear
+// IsValid
 //
-procedure TdwsFileHandle.Clear;
+function TdwsFileHandle.IsValid : Boolean;
 begin
-   FHandle:=0;
-   FOSError:=0;
+   Result := FHandle <> INVALID_HANDLE_VALUE;
+end;
+
+// GetDateTime
+//
+function TdwsFileHandle.GetDateTime : TDateTime;
+begin
+   Result := FileDateToDateTime(FileGetDate(FHandle));
+end;
+
+// SetDateTime
+//
+procedure TdwsFileHandle.SetDateTime(dt : TDateTime);
+begin
+   FileSetDateTime(FHandle, TdwsDateTime.FromLocalDateTime(dt));
+end;
+
+// Seek
+//
+function TdwsFileHandle.Seek(offset : Int64; origin : Integer) : Int64;
+begin
+   Result := FileSeek(FHandle, offset, origin);
+end;
+
+// Size
+//
+function TdwsFileHandle.Size : Int64;
+var
+   p : Integer;
+begin
+   p := FileSeek(FHandle, 0, soFromCurrent);
+   Result := FileSeek(FHandle, 0, soFromEnd);
+   FileSeek(FHandle, p, soFromBeginning);
+end;
+
+// Position
+//
+function TdwsFileHandle.Position : Int64;
+begin
+   Result := FileSeek(FHandle, 0, soFromCurrent);
+end;
+
+// Read
+//
+function TdwsFileHandle.Read(buf : Pointer; nbBytes : Int64) : Int64;
+begin
+   Result := FileRead(FHandle, buf, nbBytes);
+end;
+
+// ReadBuffer
+//
+function TdwsFileHandle.ReadBuffer(nbBytes : Int64; var dest : String) : Int64;
+
+   function AdjustToRemainingSize(nbBytes : Int64) : Int64;
+   var
+      p, n : Int64;
+   begin
+      p := Seek(0, soFromCurrent);
+      n := Seek(0, soFromEnd) - p;
+      Seek(p, soFromBeginning);
+      if nbBytes > n then
+         Result := n
+      else Result := nbBytes;
+   end;
+
+begin
+   if nbBytes <= 0 then Exit(0);
+   if nbBytes >= 100*1024 then begin
+      // before alocating a crazy large buffer, check actual file size
+      // but dont do it for smaller reads
+      nbBytes := AdjustToRemainingSize(nbBytes);
+   end;
+
+   SetLength(dest, nbBytes);
+   if Length(dest) <> nbBytes then
+      raise EdwsFileException.CreateFmt('Buffer too large (%d)', [ nbBytes ]);
+
+   Result := Read(Pointer(dest), nbBytes);
+   if Result <> nbBytes then
+      SetLength(dest, Result);
+   BytesToWordsInPlace(Pointer(dest), Result);
+end;
+
+// Write
+//
+function TdwsFileHandle.Write(buf : Pointer; nbBytes : Int64) : Int64;
+begin
+   Result := dwsXPlatform.FileWrite(FHandle, buf, nbBytes);
+end;
+
+// FlushBuffers
+//
+function TdwsFileHandle.FlushBuffers : Boolean;
+begin
+   Result := dwsXPlatform.FileFlushBuffers(FHandle);
+end;
+
+// SetEndOfFile
+//
+function TdwsFileHandle.SetEndOfFile : Boolean;
+begin
+   Result := dwsXPlatform.SetEndOfFile(FHandle);
+end;
+
+// Close
+//
+procedure TdwsFileHandle.Close;
+begin
+   if IsValid then
+      CloseFileHandle(FHandle);
+   FHandle := INVALID_HANDLE_VALUE;
 end;
 
 // ------------------
@@ -393,8 +535,11 @@ end;
 // DoEvalAsBoolean
 //
 function TFileIsValidFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
+var
+   ih : IdwsFileHandle;
 begin
-   Result:=GetIdwsFileHandle(args, 0, False)<>INVALID_HANDLE_VALUE;
+   ih := GetIdwsFileHandle(args, 0, False);
+   Result := (ih <> nil) and ih.IsValid;
 end;
 
 // ------------------
@@ -405,23 +550,12 @@ end;
 //
 function TFileRead1Func.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 var
-   buf : RawByteString;
-   n : Integer;
+   buf : String;
+   ih : IdwsFileHandle;
 begin
-   n:=args.AsInteger[2];
-   SetLength(buf, n);
-   if n>0 then begin
-      n:=FileRead(GetIdwsFileHandle(args, 0), Pointer(buf)^, n);
-      if n<0 then
-         RaiseLastOSError
-      else begin
-         SetLength(buf, n);
-         if Length(buf) <> n then
-            raise Exception.CreateFmt('File too large (%d)', [ n ]);
-      end;
-   end;
-   args.AsDataString[1]:=buf;
-   Result:=n;
+   ih := GetIdwsFileHandle(args, 0);
+   Result := ih.ReadBuffer(args.AsInteger[2], buf);
+   args.AsString[1] := buf;
 end;
 
 // ------------------
@@ -431,23 +565,8 @@ end;
 // DoEvalAsString
 //
 procedure TFileRead2Func.DoEvalAsString(const args : TExprBaseListExec; var Result : UnicodeString);
-var
-   buf : RawByteString;
-   n : Integer;
 begin
-   n:=args.AsInteger[1];
-   SetLength(buf, n);
-   if n>0 then begin
-      n:=FileRead(GetIdwsFileHandle(args, 0), Pointer(buf)^, n);
-      if n<0 then
-         RaiseLastOSError
-      else begin
-         SetLength(buf, n);
-         if Length(Result) <> n then
-            raise Exception.CreateFmt('File too large (%d)', [ n ]);
-      end;
-   end;
-   RawByteStringToScriptString(buf, Result);
+   GetIdwsFileHandle(args, 0).ReadBuffer(args.AsInteger[1], Result);
 end;
 
 // ------------------
@@ -458,24 +577,16 @@ end;
 //
 procedure TFileRead3Func.DoEvalAsString(const args : TExprBaseListExec; var Result : UnicodeString);
 var
-   buf : RawByteString;
    p, n : Int64;
-   f : THandle;
+   ih : IdwsFileHandle;
 begin
-   f:=GetIdwsFileHandle(args, 0);
-   p:=FileSeek(f, 0, 1);
-   n:=FileSeek(f, 0, 2)-p;
-   FileSeek(f, p, 0);
-   SetLength(buf, n);
-   if n>0 then begin
-      if Length(Result) <> n then
-         raise Exception.CreateFmt('File too large (%d)', [ n ]);
-      n:=FileRead(f, Pointer(buf)^, n);
-      if n<0 then
-         RaiseLastOSError
-      else SetLength(buf, n);
-   end;
-   RawByteStringToScriptString(buf, Result);
+   ih := GetIdwsFileHandle(args, 0);
+   p := ih.Seek(0, soFromCurrent);
+   n := ih.Seek(0, soFromEnd)-p;
+   if (p < 0) or (n < 0) or (ih.Seek(p, 0) < 0) then
+      RaiseLastOSError;
+
+   ih.ReadBuffer(n, Result);
 end;
 
 // ------------------
@@ -499,16 +610,14 @@ function TFileWrite1Func.DoEvalAsInteger(const args : TExprBaseListExec) : Int64
 var
    buf : RawByteString;
 begin
-   buf:=args.AsDataString[1];
-   Result:=dwsXPlatform.FileWrite(GetIdwsFileHandle(args, 0), Pointer(buf), Length(buf));
+   buf := args.AsDataString[1];
+   Result := GetIdwsFileHandle(args, 0).Write(Pointer(buf), Length(buf));
 end;
 
 // ------------------
 // ------------------ TFileWrite2Func ------------------
 // ------------------
 
-// DoEvalAsInteger
-//
 function TFileWrite2Func.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 begin
    Result:=SaveRawBytesToFile(args.AsFileName[0], args.AsDataString[1]);
@@ -520,7 +629,16 @@ end;
 
 function TFileSeekFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 begin
-   Result:=FileSeek(GetIdwsFileHandle(args, 0), args.AsInteger[1], args.AsInteger[2]);
+   Result := GetIdwsFileHandle(args, 0).Seek(args.AsInteger[1], args.AsInteger[2]);
+end;
+
+// ------------------
+// ------------------ TFilePositionFunc ------------------
+// ------------------
+
+function TFilePositionFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
+begin
+   Result := GetIdwsFileHandle(args, 0).Position;
 end;
 
 // ------------------
@@ -529,7 +647,7 @@ end;
 
 function TFileFlushBuffersFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
 begin
-   Result := FileFlushBuffers(GetIdwsFileHandle(args, 0));
+   Result := GetIdwsFileHandle(args, 0).FlushBuffers;
 end;
 
 // ------------------
@@ -537,16 +655,8 @@ end;
 // ------------------
 
 procedure TFileCloseFunc.DoEvalProc(const args : TExprBaseListExec);
-var
-   v : Variant;
-   i : IdwsFileHandle;
 begin
-   args.ExprBase[0].EvalAsVariant(args.Exec, v);
-   if (TVarData(v).VType=varUnknown) and (TVarData(v).VUnknown<>nil) then begin
-      i:=IdwsFileHandle(IUnknown(TVarData(v).VUnknown));
-      CloseFileHandle(i.GetHandle);
-      i.Clear;
-   end;
+   GetIdwsFileHandle(args, 0).Close;
 end;
 
 // ------------------
@@ -630,17 +740,9 @@ end;
 // ------------------ TFileSizeFileFunc ------------------
 // ------------------
 
-// DoEvalAsInteger
-//
 function TFileSizeFileFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
-var
-   p : Int64;
-   h : THandle;
 begin
-   h := GetIdwsFileHandle(args, 0);
-   p := FileSeek(h, Int64(0), soFromCurrent);
-   Result := FileSeek(h, Int64(0), soFromEnd);
-   FileSeek(h, p, soFromBeginning);
+   Result := GetIdwsFileHandle(args, 0).Size;
 end;
 
 // ------------------
@@ -651,11 +753,11 @@ end;
 //
 function TFileSetSizeFileFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
 var
-   h : THandle;
+   ih : IdwsFileHandle;
 begin
-   h := GetIdwsFileHandle(args, 0);
-   FileSeek(h, args.AsInteger[1], soFromBeginning);
-   Result := SetEndOfFile(h)
+   ih := GetIdwsFileHandle(args, 0);
+   ih.Seek(args.AsInteger[1], soFromBeginning);
+   Result := ih.SetEndOfFile;
 end;
 
 // ------------------
@@ -677,7 +779,7 @@ end;
 //
 procedure TFileDateTimeFileFunc.DoEvalAsFloat(const args : TExprBaseListExec; var Result : Double);
 begin
-   Result:=FileDateToDateTime(FileGetDate(GetIdwsFileHandle(args, 0)));
+   Result := GetIdwsFileHandle(args, 0).GetDateTime;
 end;
 
 // ------------------
@@ -704,7 +806,7 @@ end;
 
 procedure TFileSetDateTimeFileProc.DoEvalProc(const args : TExprBaseListExec);
 begin
-   FileSetDateTime(GetIdwsFileHandle(args, 0), TdwsDateTime.FromLocalDateTime(args.AsFloat[1]));
+   GetIdwsFileHandle(args, 0).SetDateTime(args.AsFloat[1]);
 end;
 
 // ------------------
@@ -956,6 +1058,7 @@ initialization
    RegisterInternalIntFunction(TFileWrite1Func, 'FileWrite', ['f', SYS_FILE, 'buf', SYS_STRING], [iffOverloaded], 'Write');
    RegisterInternalIntFunction(TFileWrite2Func, 'FileWrite', ['name', SYS_STRING, 'buf', SYS_STRING], [iffOverloaded], '');
    RegisterInternalIntFunction(TFileSeekFunc, 'FileSeek', ['f', SYS_FILE, 'offset', SYS_INTEGER, 'origin', SYS_INTEGER], [], 'Seek');
+   RegisterInternalIntFunction(TFilePositionFunc, 'FilePos', ['f', SYS_FILE], [], 'Position');
    RegisterInternalBoolFunction(TFileFlushBuffersFunc, 'FileFlushBuffers', ['f', SYS_FILE]);
 
    RegisterInternalProcedure(TFileCloseFunc, 'FileClose', ['f', SYS_FILE], 'Close');
