@@ -709,6 +709,7 @@ type
          procedure InitData(const data : TData; offset : Integer); virtual;
          procedure InitDataContext(const data : IDataContext); inline;
          procedure InitVariant(var v : Variant); virtual;
+         procedure InitString(var s : String); virtual;
          function DynamicInitialization : Boolean; virtual;
 
          function IsType : Boolean; override;
@@ -1162,6 +1163,7 @@ type
 
          procedure InitData(const data : TData; offset : Integer); override;
          procedure InitVariant(var v : Variant); override;
+         procedure InitString(var s : String); override;
 
          function LengthPseudoSymbol(baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; inline;
          function HighPseudoSymbol(baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; inline;
@@ -6064,6 +6066,13 @@ begin
    VarSetDefaultString(v);
 end;
 
+// InitString
+//
+procedure TBaseStringSymbol.InitString(var s : String);
+begin
+   s := '';
+end;
+
 // InitPseudoSymbol
 //
 function TBaseStringSymbol.InitPseudoSymbol(var p : TPseudoMethodSymbol; sk : TSpecialKeywordKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol;
@@ -8492,6 +8501,18 @@ begin
    SetLength(buf, 1);
    InitData(buf, 0);
    VarCopySafe(v, buf[0]);
+end;
+
+// InitString
+//
+procedure TTypeSymbol.InitString(var s : String);
+var
+   buf : TData;
+begin
+   Assert(Size = 1);
+   SetLength(buf, 1);
+   InitData(buf, 0);
+   VariantToString(buf[0], s);
 end;
 
 // DynamicInitialization
