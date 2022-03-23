@@ -1578,7 +1578,7 @@ type
          FClassSym : TClassSymbol;
          FExternalObject : TObject;
          FExecutionContext : TdwsProgramExecution;
-         FOnObjectDestroy: TObjectDestroyEvent;
+         FOnObjectDestroy : TObjectDestroyEvent;
          FDestroyed : Boolean;
 
       protected
@@ -1616,7 +1616,7 @@ type
 
    TScriptAssociativeArrayHashCodes = array of Cardinal;
 
-   TScriptAssociativeArray = class sealed (TScriptObj, IScriptAssociativeArray)
+   TScriptAssociativeArray = class sealed (TDataContext, IScriptAssociativeArray)
       private
          FElementTyp, FKeyTyp : TTypeSymbol;
          FElementSize, FKeySize : Integer;
@@ -1624,7 +1624,7 @@ type
          FCount : NativeInt;
          FCapacity, FGrowth : NativeInt;
          FHashCodes : TScriptAssociativeArrayHashCodes;
-         FKeys : TData;
+         FKeys : IDataContext;
          FCreateKeyOnAccess : Boolean;
 
       protected
@@ -1651,7 +1651,6 @@ type
          procedure GetDataAsString(exec : TdwsExecution; index : TTypedExpr; var result : String); overload;
          procedure GetDataAsString(exec : TdwsExecution; const keyValue : Variant; var result : String); overload;
 
-         //procedure ReplaceData(exec : TdwsExecution; index : Int64; value : TDataExpr);
          procedure ReplaceValue(exec : TdwsExecution; index, value : TTypedExpr); overload;
          procedure ReplaceValue(exec : TdwsExecution; const key, value : Variant); overload;
 
@@ -1666,8 +1665,9 @@ type
          function Count : NativeInt;
          function Capacity : NativeInt;
 
-         function CopyKeys : TData;
+         procedure CopyKeys(const dest : IScriptDynArray);
 
+         property Keys : IDataContext read FKeys;
          property KeyType : TTypeSymbol read FKeyTyp;
          property ElementType : TTypeSymbol read FElementTyp;
    end;
@@ -1710,9 +1710,9 @@ uses dwsFunctions, dwsCoreExprs, dwsMagicExprs, dwsMethodExprs, dwsUnifiedConsta
 
 // TScriptDynamicArray_InitData
 //
-procedure TScriptDynamicArray_InitData(elemTyp : TTypeSymbol; var result : Variant);
+procedure TScriptDynamicArray_InitData(elemTyp : TTypeSymbol; const resultDC : IDataContext; offset : NativeInt);
 begin
-   result := CreateNewDynamicArray(elemTyp);
+   resultDC.AsInterface[offset] := CreateNewDynamicArray(elemTyp);
 end;
 
 { TScriptObjectWrapper }
@@ -1748,8 +1748,8 @@ type
 constructor TScriptObjectWrapper.Create(scriptObj : TScriptObjInstance);
 begin
    inherited Create;
-   FScriptObj:=scriptObj;
-   ReplaceData(scriptObj.AsPData^);
+   FScriptObj := scriptObj;
+   DirectData := scriptObj.DirectData;
 end;
 
 // GetClassSym
@@ -2440,7 +2440,7 @@ begin
    try
       destroySym := CompilerContext.TypDefaultDestructor;
       expr := TDestructorVirtualExpr.Create(CompilerContext, cNullPos, destroySym,
-                                            TConstExpr.Create(cNullPos, ScriptObj.ClassSym, scriptObj));
+                                            TConstExpr.CreateValue(cNullPos, ScriptObj.ClassSym, scriptObj));
 
       caller:=CallStackLastExpr;
       if caller<>nil then begin
@@ -3850,11 +3850,8 @@ end;
 // EvalAsScriptDynArray
 //
 procedure TProgramExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
-var
-   intf : IUnknown;
 begin
-   EvalAsInterface(exec, intf);
-   Result := intf as IScriptDynArray;
+   EvalAsInterface(exec, IUnknown(result));
 end;
 
 // EvalAsScriptAssociativeArray
@@ -4562,6 +4559,7 @@ function TFuncExprBase.Optimize(context : TdwsCompilerContext) : TProgramExpr;
 var
    buf : Variant;
    prog : TdwsProgram;
+   resultDC : IDataContext;
 begin
    Result:=Self;
    if IsConstant then begin
@@ -4574,8 +4572,8 @@ begin
          end else begin
             context.Execution.Stack.Push(prog.DataSize);
             try
-               EvalAsVariant(context.Execution, buf);
-               Result:=TConstExpr.Create(ScriptPos, typ, context.Execution.Stack.Data, FResultAddr);
+               GetDataPtr(context.Execution, resultDC);
+               Result:=TConstExpr.CreateData(ScriptPos, typ, resultDC);
             finally
                context.Execution.Stack.Pop(prog.DataSize);
             end;
@@ -4875,11 +4873,9 @@ end;
 procedure TPushOperator.ExecuteTempAddr(exec : TdwsExecution);
 var
    vpd : IDataContext;
-   data : TData;
 begin
-   SetLength(data, 1);
-   FArgExpr.EvalAsVariant(exec, data[0]);
-   exec.DataContext_Create(data, 0, vpd);
+   exec.DataContext_CreateEmpty(1, vpd);
+   FArgExpr.EvalAsVariantToDataContext(exec, vpd, 0);
    exec.Stack.WriteInterfaceValue(exec.Stack.StackPointer+FStackAddr, vpd);
 end;
 
@@ -4889,13 +4885,10 @@ procedure TPushOperator.ExecuteTempData(exec : TdwsExecution);
 var
    vpd : IDataContext;
    dataExpr : TDataExpr;
-   data : TData;
 begin
-   SetLength(data, FArgExpr.Typ.Size);
+   dataExpr := TDataExpr(FArgExpr);
 
-   dataExpr:=TDataExpr(FArgExpr);
-   exec.DataContext_Create(data, 0, vpd);
-
+   exec.DataContext_CreateEmpty(FArgExpr.Typ.Size, vpd);
    vpd.WriteData(dataExpr.DataPtr[exec], FArgExpr.Typ.Size);
 
    exec.Stack.WriteInterfaceValue(exec.Stack.StackPointer+FStackAddr, vpd);
@@ -4907,14 +4900,12 @@ procedure TPushOperator.ExecuteTempArrayAddr(exec : TdwsExecution);
 var
    ace : TArrayConstantExpr;
    vpd : IDataContext;
-   data : TData;
 begin
    ace:=TArrayConstantExpr(FArgExpr);
-   SetLength(data, ace.Size);
 
-   exec.DataContext_Create(data, 0, vpd);
+   exec.DataContext_CreateEmpty(ace.Size, vpd);
 
-   ace.EvalAsTData(exec, vpd.AsPData^);
+   ace.EvalToDataContext(exec, vpd, 0);
 
    exec.Stack.WriteInterfaceValue(exec.Stack.StackPointer+FStackAddr, vpd);
 end;
@@ -5000,8 +4991,7 @@ var
    dataExpr : TDataExpr;
 begin
    dataExpr:=TDataExpr(FArgExpr);
-   dataExpr.DataPtr[exec].CopyData(exec.Stack.Data, exec.Stack.StackPointer+FStackAddr,
-                                   FTypeParamSym.Typ.Size);
+   exec.Stack.WriteData(exec.Stack.StackPointer+FStackAddr, dataExpr.DataPtr[exec], 0, FTypeParamSym.Typ.Size);
 end;
 
 // ExecuteConstData
@@ -5010,15 +5000,18 @@ procedure TPushOperator.ExecuteConstData(exec : TdwsExecution);
 var
    constExpr : TConstExpr;
 begin
-   constExpr:=TConstExpr(FArgExpr);
-   exec.Stack.WriteData(0, exec.Stack.StackPointer+FStackAddr, Length(constExpr.Data), constExpr.Data);
+   constExpr := TConstExpr(FArgExpr);
+   exec.Stack.WriteData(exec.Stack.StackPointer+FStackAddr, constExpr.DataContext, 0, constExpr.Typ.Size);
 end;
 
 // ExecuteInitResult
 //
 procedure TPushOperator.ExecuteInitResult(exec : TdwsExecution);
+var
+   buf : IDataContext;
 begin
-   TTypeSymbol(FArgExpr).InitData(exec.Stack.Data, exec.Stack.StackPointer+FStackAddr);
+   exec.DataContext_CreateStack(FStackAddr, buf);
+   TTypeSymbol(FArgExpr).InitDataContext(buf, 0);
 end;
 
 // ExecuteLazy
@@ -5720,12 +5713,9 @@ end;
 // GetDataPtr
 //
 procedure TAnonymousFuncRefExpr.GetDataPtr(exec : TdwsExecution; var result : IDataContext);
-var
-   data : TData;
 begin
-   SetLength(data, 1);
-   EvalAsVariant(exec, data[0]);
-   exec.DataContext_Create(data, 0, result);
+   exec.DataContext_CreateEmpty(1, result);
+   EvalAsVariantToDataContext(exec, result, 0);
 end;
 
 // ------------------
@@ -6044,7 +6034,7 @@ var
 begin
    if IsConstant then begin
       EvalAsVariant(context.Execution, v);
-      Result := TConstExpr.Create(ScriptPos, context.TypVariant, v);
+      Result := TConstExpr.CreateValue(ScriptPos, context.TypVariant, v);
       Orphan(context);
    end else Result:=Self;
 end;
@@ -6492,13 +6482,10 @@ procedure TProgramInfo.GetSymbolInfo(sym : TSymbol; var info : IInfo);
 
    procedure GetTypeSymbolInfo(sym : TSymbol; var Result : IInfo);
    var
-      dat : TData;
       locData : IDataContext;
    begin
       if sym.BaseType is TClassSymbol then begin
-         SetLength(dat, 1);
-         VarClearSafe(dat[0]);
-         Execution.DataContext_Create(dat, 0, locData);
+         Execution.DataContext_CreateEmpty(1, locData);
          Result := TInfoClassObj.Create(Self, sym, locData);
       end else Result:=nil;
    end;
@@ -6548,11 +6535,8 @@ procedure TProgramInfo.GetSymbolInfo(sym : TSymbol; var info : IInfo);
    end;
 
    procedure GetConstSymbol(sym : TConstSymbol; var Result : IInfo);
-   var
-      locData : IDataContext;
    begin
-      Execution.DataContext_Create(sym.Data, 0, locData);
-      TInfo.SetChild(Result, Self, sym.Typ, locData);
+      TInfo.SetChild(Result, Self, sym.Typ, sym.DataContext);
    end;
 
 begin
@@ -6660,21 +6644,18 @@ end;
 
 function TProgramInfo.GetTemp(const DataType: String): IInfo;
 var
-  data: TData;
+  data : IDataContext;
   typSym: TTypeSymbol;
-  locData : IDataContext;
 begin
   typSym := FTable.FindTypeSymbol(DataType, cvMagic);
 
   if not Assigned(typSym) then
     raise Exception.CreateFmt(RTE_DatatypeNotFound, [DataType]);
 
-  data := nil;
-  SetLength(data, typSym.Size);
-  typSym.InitData(data, 0);
+  data := TDataContext.CreateStandalone(typSym.Size);
+  typSym.InitDataContext(data, 0);
 
-  Execution.DataContext_Create(data, 0, locData);
-  TInfo.SetChild(Result, Self, typSym, locData);
+  TInfo.SetChild(Result, Self, typSym, data);
 end;
 
 // RaiseExceptObj
@@ -7241,7 +7222,6 @@ constructor TScriptObjInstance.Create(aClassSym : TClassSymbol; executionContext
 var
    externalClass : TClassSymbol;
    fieldIter : TFieldSymbol;
-   instanceData : PData;
 begin
    FClassSym:=aClassSym;
    if aClassSym=nil then Exit;
@@ -7252,10 +7232,9 @@ begin
    SetDataLength(aClassSym.ScriptInstanceSize);
 
    // initialize fields
-   instanceData:=AsPData;
    fieldIter:=aClassSym.FirstField;
    while fieldIter<>nil do begin
-      fieldIter.InitData(instanceData^, 0);
+      fieldIter.InitDataContext(Self, 0);
       fieldIter:=fieldIter.NextField;
    end;
 
@@ -7446,12 +7425,12 @@ end;
 
 // TScriptAssociativeInteger_InitData
 //
-procedure TScriptAssociativeArray_InitData(typ : TTypeSymbol; var result : Variant);
+procedure TScriptAssociativeArray_InitData(typ : TTypeSymbol; const resultDC : IDataContext; offset : NativeInt);
 var
    a : TAssociativeArraySymbol;
 begin
-   a:=(typ as TAssociativeArraySymbol);
-   result:=IScriptAssociativeArray(TScriptAssociativeArray.CreateNew(a.KeyType, a.Typ));
+   a := (typ as TAssociativeArraySymbol);
+   resultDC.AsInterface[offset] := IScriptAssociativeArray(TScriptAssociativeArray.CreateNew(a.KeyType, a.Typ));
 end;
 
 // CreateNew
@@ -7468,6 +7447,7 @@ begin
    else size := 0;
    Result.FKeyTyp := keyTyp;
    Result.FKeySize := size;
+   Result.FKeys := TDataContext.CreateStandalone(0);
 
    if elemTyp <> nil then begin
       size := elemTyp.Size;
@@ -7499,14 +7479,13 @@ begin
    FGrowth:=(FCapacity*11) div 16;
 
    oldHashCodes:=FHashCodes;
-   oldKeys:=FKeys;
+   oldKeys := FKeys.AsPData^;
    oldData := AsPData^;
 
    FHashCodes:=nil;
    SetLength(FHashCodes, FCapacity);
 
-   FKeys:=nil;
-   SetLength(FKeys, FCapacity*FKeySize);
+   FKeys := TDataContext.CreateStandalone(FCapacity*FKeySize);
 
    ClearData;
    SetDataLength(FCapacity*FElementSize);
@@ -7518,7 +7497,7 @@ begin
       while FHashCodes[j]<>0 do
          j:=(j+1) and n;
       FHashCodes[j]:=oldHashCodes[i];
-      DWSCopyData(oldKeys, i*FKeySize, FKeys, j*FKeySize, FKeySize);
+      DWSCopyData(oldKeys, i*FKeySize, FKeys.AsPData^, j*FKeySize, FKeySize);
       DWSCopyData(oldData, i*FElementSize, AsPData^, j*FElementSize, FElementSize);
    end;
 end;
@@ -7583,7 +7562,7 @@ procedure TScriptAssociativeArray.ReplaceValue(exec : TdwsExecution; index, valu
 
    procedure WriteDataExpr(index : Integer);
    begin
-      WriteData(index*FElementSize, (value as TDataExpr).GetDataPtrFunc(exec), FElementSize)
+      WriteData(index*FElementSize, (value as TDataExpr).GetDataPtrFunc(exec), 0, FElementSize)
    end;
 
 var
@@ -7597,7 +7576,7 @@ begin
    i:=(hashCode and (FCapacity-1));
    if not LinearFind(key, i) then begin
       FHashCodes[i]:=hashCode;
-      key.CopyData(FKeys, i*FKeySize, FKeySize);
+      FKeys.WriteData(i*FKeySize, key,0, FKeySize);
       Inc(FCount);
    end;
    if FElementSize > 1 then
@@ -7647,19 +7626,16 @@ begin
    if FCreateKeyOnAccess then begin
 
       CreateOffset(i*FElementSize, result);
-      FElementTyp.InitDataContext(result);
+      FElementTyp.InitDataContext(result, 0);
 
       FHashCodes[i] := hashCode;
-      key.CopyData(FKeys, i*FKeySize, FKeySize);
+      FKeys.WriteData(i*FKeySize, key, 0, FKeySize);
       Inc(FCount);
-
-//      result.EvalAsVariant(0, buf);
-//      AsVariant[i] := buf;
 
    end else begin
 
       exec.DataContext_CreateEmpty(FElementSize, result);
-      FElementTyp.InitDataContext(result);
+      FElementTyp.InitDataContext(result, 0);
 
    end;
 end;
@@ -7670,6 +7646,7 @@ procedure TScriptAssociativeArray.GetDataAsVariant(exec : TdwsExecution; const k
 var
    hashCode : Cardinal;
    i : Integer;
+   dc : IDataContext;
 begin
    if FCreateKeyOnAccess then
       if FCount >= FGrowth then Grow;
@@ -7683,8 +7660,9 @@ begin
       end;
    end else hashcode := 0;
 
-   VarClearSafe(result);
-   FElementTyp.InitVariant(result);
+   dc := TDataContext.CreateStandalone(1);
+   FElementTyp.InitDataContext(dc, 0);
+   dc.EvalAsVariant(0, result);
 
    if FCreateKeyOnAccess then begin
       FHashCodes[i] := hashCode;
@@ -7845,7 +7823,7 @@ begin
 
       if ((gap >= k) or (k > i)) and ((i >= gap) or (k <= gap)) and ((i >= gap) or (k > i)) then begin
          InternalCopyData(i*FElementSize, gap*FElementSize, FElementSize);
-         DWSCopyData(FKeys, i*FKeySize, gap*FKeySize, FKeySize);
+         DWSCopyData(FKeys.AsPData^, i*FKeySize, gap*FKeySize, FKeySize);
          FHashCodes[gap] := FHashCodes[i];
          FHashCodes[i] := 0;
          gap := i;
@@ -7853,8 +7831,8 @@ begin
    until False;
 
    FHashCodes[gap] := 0;
-   FKeyTyp.InitData(FKeys, gap*FKeySize);
-   FElementTyp.InitData(AsPData^, gap*FElementSize);
+   FKeyTyp.InitDataContext(FKeys, gap*FKeySize);
+   FElementTyp.InitDataContext(Self, gap*FElementSize);
    Dec(FCount);
 
    Result := True;
@@ -7867,7 +7845,7 @@ end;
 procedure TScriptAssociativeArray.Clear;
 begin
    SetDataLength(0);
-   FKeys:=nil;
+   FKeys := TDataContext.CreateStandalone(0);
    FHashCodes:=nil;
    FCount:=0;
    FCapacity:=0;
@@ -7881,7 +7859,7 @@ begin
    if Cardinal(index) >= Cardinal(FCapacity) then Exit(False);
    if FHashCodes[index] = 0 then Exit(False);
 
-   DWSCopyData(FKeys, index*FKeySize, key, 0, FKeySize);
+   DWSCopyData(FKeys.AsPData^, index*FKeySize, key, 0, FKeySize);
    CreateOffset(index*FElementSize, value);
    Result := True;
 end;
@@ -7902,23 +7880,23 @@ end;
 
 // CopyKeys
 //
-function TScriptAssociativeArray.CopyKeys : TData;
+procedure TScriptAssociativeArray.CopyKeys(const dest : IScriptDynArray);
 var
    i, k : Integer;
 begin
-   SetLength(Result, FKeySize*FCount);
+   dest.ArrayLength := FCount;
    k := 0;
    if FKeySize > 1 then begin
       for i := 0 to FCapacity-1 do begin
          if FHashCodes[i] <> 0 then begin
-            DWSCopyData(FKeys, i*FKeySize, Result, k, FKeySize);
+            dest.WriteData(k*FKeySize, FKeys, i*FKeySize, FKeySize);
             Inc(k, FKeySize);
          end;
       end;
    end else begin
       for i := 0 to FCapacity-1 do begin
          if FHashCodes[i] <> 0 then begin
-            VarCopySafe(Result[k], FKeys[i]);
+            dest.AsVariant[k] := FKeys.AsVariant[i];
             Inc(k);
          end;
       end;

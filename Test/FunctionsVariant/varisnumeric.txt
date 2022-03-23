@@ -9,5 +9,5 @@ TInterfaceSymbol is not numeric
 123.5 is numeric
  is not numeric
 null is not numeric
-False is numeric
+False is not numeric
  is not numeric

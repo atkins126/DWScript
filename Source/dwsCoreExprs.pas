@@ -385,11 +385,13 @@ type
 
          procedure EvalAsString(exec : TdwsExecution; var result : String); override;
          procedure EvalAsVariant(exec : TdwsExecution; var Result : Variant); override;
-         function EvalAsInteger(exec : TdwsExecution) : Int64; override;
-         function EvalAsFloat(exec : TdwsExecution) : Double; override;
-         function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
+         function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
+         function  EvalAsFloat(exec : TdwsExecution) : Double; override;
+         function  EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
          procedure EvalAsScriptObj(exec : TdwsExecution; var Result : IScriptObj); override;
          procedure EvalAsInterface(exec : TdwsExecution; var result : IUnknown); override;
+         procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
+         procedure EvalAsScriptAssociativeArray(exec : TdwsExecution; var result : IScriptAssociativeArray); override;
 
          procedure GetDataPtr(exec : TdwsExecution; var result : IDataContext); override;
 
@@ -1917,7 +1919,7 @@ end;
 //
 procedure TVarExpr.GetDataPtr(exec : TdwsExecution; var result : IDataContext);
 begin
-   exec.Stack.InitDataPtr(Result, FStackAddr);
+   exec.Stack.InitBaseDataPtr(Result, FStackAddr);
 end;
 
 // GetRelativeDataPtr
@@ -2071,7 +2073,8 @@ end;
 //
 function TIntVarExpr.EvalAsPInteger(exec : TdwsExecution) : PInt64;
 begin
-   Result:=exec.Stack.PointerToIntValue(exec.Stack.BasePointer+FStackAddr);
+//   Result:=exec.Stack.PointerToIntValue(exec.Stack.BasePointer+FStackAddr);
+   Result:=exec.Stack.PointerToIntValue_BaseRelative(FStackAddr);
 end;
 
 // ------------------
@@ -2225,14 +2228,14 @@ end;
 
 function TBoolVarExpr.EvalAsBoolean(exec : TdwsExecution) : Boolean;
 begin
-   Result:=exec.Stack.ReadBoolValue(exec.Stack.BasePointer + FStackAddr);
+   Result:=exec.Stack.ReadBoolValue_BaseRelative(FStackAddr);
 end;
 
 // EvalAsInteger
 //
 function TBoolVarExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
 begin
-   Result:=Int64(exec.Stack.ReadBoolValue(exec.Stack.BasePointer + FStackAddr));
+   Result := Ord(exec.Stack.ReadBoolValue_BaseRelative(FStackAddr));
 end;
 
 // ------------------
@@ -2826,7 +2829,7 @@ var
    dc : IDataContext;
 begin
    FExpr.GetDataPtr(exec, dc);
-   FExpr.Typ.InitDataContext(dc);
+   FExpr.Typ.InitDataContext(dc, 0);
 end;
 
 // GetSubExpr
@@ -2866,19 +2869,21 @@ var
    dataExpr : TDataExpr;
    fieldSym : TFieldSymbol;
    fieldAddr : Integer;
+   dc : IDataContext;
 begin
    recType:=TRecordSymbol(Typ);
    for sym in recType.Members do begin
       if sym.ClassType=TFieldSymbol then begin
          fieldSym := TFieldSymbol(sym);
          expr := fieldSym.DefaultExpr;
-         if expr = nil then
-            fieldSym.InitData(exec.Stack.Data, exec.Stack.BasePointer+FAddr)
-         else begin
+         if expr = nil then begin
+            exec.DataContext_CreateBase(FAddr, dc);
+            fieldSym.InitDataContext(dc, 0);
+         end else begin
             fieldAddr := exec.Stack.BasePointer+FAddr+fieldSym.Offset;
             if (expr is TDataExpr) and (TDataExpr(expr).Typ.Size > 1) then begin
                dataExpr := TDataExpr(expr);
-               dataExpr.DataPtr[exec].CopyData(exec.Stack.Data, fieldAddr, fieldSym.Size);
+               exec.Stack.WriteData(fieldAddr, dataExpr.DataPtr[exec], 0, fieldSym.Size);
             end else expr.EvalAsVariant(exec, exec.Stack.Data[fieldAddr]);
          end;
       end;
@@ -3073,6 +3078,20 @@ end;
 // EvalAsInterface
 //
 procedure TFieldExpr.EvalAsInterface(exec : TdwsExecution; var result : IUnknown);
+begin
+   GetScriptObj(exec).EvalAsInterface(FieldSym.Offset, PIUnknown(@Result)^);
+end;
+
+// EvalAsScriptDynArray
+//
+procedure TFieldExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
+begin
+   GetScriptObj(exec).EvalAsInterface(FieldSym.Offset, PIUnknown(@Result)^);
+end;
+
+// EvalAsScriptAssociativeArray
+//
+procedure TFieldExpr.EvalAsScriptAssociativeArray(exec : TdwsExecution; var result : IScriptAssociativeArray);
 begin
    GetScriptObj(exec).EvalAsInterface(FieldSym.Offset, PIUnknown(@Result)^);
 end;
@@ -5467,10 +5486,9 @@ procedure TAssignArrayConstantExpr.EvalNoResult(exec : TdwsExecution);
 var
    dynIntf : IScriptDynArray;
    dynObj : IScriptDynArray;
-   srcData : TData;
-   dataPtr : IDataContext;
+   srcData : IDataContext;
 begin
-   TArrayConstantExpr(FRight).EvalAsTData(exec, srcData);
+   TArrayConstantExpr(FRight).GetDataPtr(exec, srcData);
    if FLeft.Typ.ClassType = TDynamicArraySymbol then begin
       // to dynamic array
       FLeft.EvalAsScriptDynArray(exec, dynIntf);
@@ -5481,12 +5499,11 @@ begin
       end else begin
          dynObj := dynIntf;
       end;
-      dynObj.ArrayLength := Length(srcData) div dynObj.ElementSize;
-      dynObj.WriteData(srcData, 0, Length(srcData));
+      dynObj.ArrayLength := srcData.DataLength div dynObj.ElementSize;
+      dynObj.WriteData(0, srcData, 0, srcData.DataLength);
    end else begin
       // to static array
-      exec.DataContext_Create(srcData, 0, dataPtr);
-      FLeft.AssignData(exec, dataPtr);
+      FLeft.AssignData(exec, srcData);
    end;
 end;
 
@@ -5750,7 +5767,7 @@ var
    dataPtr : IDataContext;
 begin
    TVarExpr(FLeft).GetDataPtr(exec, dataPtr);
-   FLeft.Typ.InitDataContext(dataPtr);
+   FLeft.Typ.InitDataContext(dataPtr, 0);
 end;
 
 // ------------------
@@ -8192,15 +8209,15 @@ procedure TSwapExpr.EvalNoResult(exec : TdwsExecution);
 
    procedure SwapN(size : Integer);
    var
-      buf : TData;
+      buf : IDataContext;
       dataPtr0, dataPtr1 : IDataContext;
    begin
-      SetLength(buf, size);
+      buf := exec.Stack.CreateEmpty(size);
       dataPtr0:=Arg0.DataPtr[exec];
       dataPtr1:=Arg1.DataPtr[exec];
-      dataPtr0.CopyData(buf, 0, size);
+      buf.WriteData(dataPtr0, size);
       dataPtr0.WriteData(dataPtr1, size);
-      dataPtr1.WriteData(buf, 0, size);
+      dataPtr1.WriteData(buf, size);
    end;
 
 var

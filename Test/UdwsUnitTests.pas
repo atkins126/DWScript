@@ -45,7 +45,9 @@ type
          procedure FuncFloatEval(Info: TProgramInfo);
          procedure FuncPointEval(Info: TProgramInfo);
          procedure FuncPointVarParamEval(Info: TProgramInfo);
+         procedure FuncPointVarParamCallerEval(Info: TProgramInfo);
          procedure FuncPointArrayEval(Info: TProgramInfo);
+         procedure FuncPointArraySwapXYEval(Info: TProgramInfo);
          procedure FuncCallbackFuncNameEval(Info: TProgramInfo);
          procedure FuncClassNameEval(Info: TProgramInfo);
          procedure FuncMetaClassNameEval(Info: TProgramInfo);
@@ -113,6 +115,7 @@ type
          procedure CallFunc;
          procedure CallFuncVarParam;
          procedure CallFuncPointVarParam;
+         procedure CallFuncPointVarParamCaller;
          procedure CallFuncPointArray;
          procedure PredefinedVar;
          procedure VarDateTime;
@@ -412,11 +415,29 @@ begin
    func.OnEval:=FuncPointVarParamEval;
 
    func:=FUnit.Functions.Add;
+   func.Name:='FuncPointVarParamCaller';
+   param:=func.Parameters.Add;
+   param.Name:='pIn';
+   param.DataType:='TPoint';
+   param:=func.Parameters.Add;
+   param.Name:='pOut';
+   param.DataType:='TPoint';
+   param.IsVarParam:=True;
+   func.OnEval:=FuncPointVarParamCallerEval;
+
+   func:=FUnit.Functions.Add;
    func.Name:='FuncPointArray';
    param:=func.Parameters.Add;
    param.Name:='a';
    param.DataType:='TPoints';
    func.OnEval:=FuncPointArrayEval;
+
+   func:=FUnit.Functions.Add;
+   func.Name:='FuncPointArraySwapXY';
+   param:=func.Parameters.Add;
+   param.Name:='a';
+   param.DataType:='TPoints';
+   func.OnEval:=FuncPointArraySwapXYEval;
 
    func:=FUnit.Functions.Add;
    func.Name:='FuncClassName';
@@ -890,6 +911,19 @@ begin
    pOut.Member['y'].Value:=pIn.Member['y'].Value+2;
 end;
 
+// FuncPointVarParamCallerEval
+//
+procedure TdwsUnitTestsContext.FuncPointVarParamCallerEval(Info: TProgramInfo);
+var
+   f : IInfo;
+begin
+   f := Info.Func['FuncPointVarParam'];
+   f.Parameter['pIn'].Data := Info.Vars['pIn'].Data;
+   f.Parameter['pOut'].Data := Info.Vars['pOut'].Data;
+   f.Call;
+   Info.Vars['pOut'].Data := f.Parameter['pOut'].Data;
+end;
+
 // FuncPointArrayEval
 //
 procedure TdwsUnitTestsContext.FuncPointArrayEval(Info: TProgramInfo);
@@ -908,6 +942,28 @@ begin
    item:=a.Element([1]);
    item.Member['x'].Value:=3;
    item.Member['y'].Value:=4;
+end;
+
+// FuncPointArraySwapXYEval
+//
+procedure TdwsUnitTestsContext.FuncPointArraySwapXYEval(Info: TProgramInfo);
+var
+   a : IInfo;
+   data : TData;
+   i, tmp : Integer;
+begin
+   a := Info.Vars['a'];
+   data := a.Data;
+
+   i := 0;
+   while i <= High(data)-1 do begin
+      tmp := data[i];
+      data[i] := data[i+1];
+      data[i+1] := tmp;
+      Inc(i, 2);
+   end;
+
+   a.Data := data;
 end;
 
 // FuncCallbackFuncNameEval
@@ -1803,6 +1859,26 @@ begin
    CheckEquals('11'#13#10'22'#13#10, exec.Result.ToString);
 end;
 
+// CallFuncPointVarParamCaller
+//
+procedure TdwsUnitTests.CallFuncPointVarParamCaller;
+var
+   prog : IdwsProgram;
+   exec : IdwsProgramExecution;
+begin
+   prog:=FCompiler.Compile( 'var p1, p2 : TPoint;'
+                           +'p1.X:=10; p1.Y:=20;'
+                           +'FuncPointVarParamCaller(p1, p2);'
+                           +'PrintLn(p2.X);'
+                           +'PrintLn(p2.Y);');
+
+   CheckEquals('', prog.Msgs.AsInfo, 'Compile');
+
+   exec:=prog.Execute;
+
+   CheckEquals('11'#13#10'22'#13#10, exec.Result.ToString);
+end;
+
 // CallFuncPointArray
 //
 procedure TdwsUnitTests.CallFuncPointArray;
@@ -1814,13 +1890,19 @@ begin
                            +'FuncPointArray(a);'
                            +'var i : Integer;'
                            +'for i:=0 to a.High do'
-                           +'   PrintLn(IntToStr(a[i].x)+","+IntToStr(a[i].y));');
-
+                           +'   PrintLn(IntToStr(a[i].x)+","+IntToStr(a[i].y));'
+                           +'FuncPointArraySwapXY(a);'
+                           +'for i:=0 to a.High do'
+                           +'   PrintLn(a[i].x.ToString+","+a[i].y.ToString);'
+                           );
    CheckEquals('', prog.Msgs.AsInfo, 'Compile');
 
    exec:=prog.Execute;
 
-   CheckEquals('1,2'#13#10'3,4'#13#10, exec.Result.ToString);
+   CheckEquals('', exec.Msgs.AsInfo, 'Exec');
+
+   CheckEquals('1,2'#13#10'3,4'#13#10
+              +'2,1'#13#10'4,3'#13#10, exec.Result.ToString);
 end;
 
 // PredefinedVar

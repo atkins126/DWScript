@@ -990,8 +990,6 @@ function UnicodeSameText(const s1, s2 : String) : Boolean; overload;
 {$endif}
 
 function AsciiCompareLen(p1, p2 : PAnsiChar; n : Integer) : Integer; overload;
-function AsciiCompareText(p : PAnsiChar; const s : RawByteString) : Integer; deprecated;
-function AsciiSameText(p : PAnsiChar; const s : RawByteString) : Boolean; deprecated;
 
 function PosA(const sub, main : RawByteString) : Integer; inline;
 
@@ -1142,9 +1140,6 @@ function  VariantArrayHighBound(const v : Variant; index : Integer) : Integer; i
 procedure WriteVariant(writer: TWriter; const value: Variant);
 function ReadVariant(reader: TReader): Variant;
 
-type
-   EISO8601Exception = class (Exception);
-
 function TryISO8601ToDateTime(const v : String; var aResult : TDateTime) : Boolean;
 function ISO8601ToDateTime(const v : String) : TDateTime;
 function DateTimeToISO8601(dt : TDateTime; extendedFormat : Boolean) : String;
@@ -1162,7 +1157,13 @@ function PopCount32(v : Int32) : Integer;
 function PopCount64(p : PInt64; nbInt64s : Integer) : Integer;
 function PopCount(p : PByte; n : Integer) : Integer;
 
+procedure SwapInt64(var a, b : Int64); inline;
+procedure SwapDoubles(var a, b : Double); inline;
+procedure SwapPointers(var a, b : Pointer); inline;
+
 type
+   EISO8601Exception = class (Exception);
+
    TTwoChars = packed array [0..1] of Char;
    PTwoChars = ^TTwoChars;
 const
@@ -1947,15 +1948,15 @@ begin
          '1', 'T', 't', 'Y', 'y' : Exit(True);
       end;
       3 : begin
-         Exit(    ((p[0] = 'Y') or (p[0] = 'y'))
-              and ((p[1] = 'E') or (p[1] = 'e'))
-              and ((p[2] = 'S') or (p[2] = 's')));
+         if     ((p[0] = 'Y') or (p[0] = 'y'))
+            and ((p[1] = 'E') or (p[1] = 'e'))
+            and ((p[2] = 'S') or (p[2] = 's')) then Exit(True);
       end;
       4 : begin
-         Exit(    ((p[0] = 'T') or (p[0] = 't'))
-              and ((p[1] = 'R') or (p[1] = 'r'))
-              and ((p[2] = 'U') or (p[2] = 'u'))
-              and ((p[3] = 'E') or (p[3] = 'e')));
+         if     ((p[0] = 'T') or (p[0] = 't'))
+            and ((p[1] = 'R') or (p[1] = 'r'))
+            and ((p[2] = 'U') or (p[2] = 'u'))
+            and ((p[3] = 'E') or (p[3] = 'e')) then Exit(True);
       end;
    end;
    // special case of integer: zero is false, everything else is true
@@ -2829,7 +2830,6 @@ begin
    VarClearSafe(dest);
 
    TVarData(dest).VType := varInt64;
-   TVarData(dest).VInt64 := 0;
 end;
 
 // VarSetDefaultDouble
@@ -2839,7 +2839,6 @@ begin
    VarClearSafe(dest);
 
    TVarData(dest).VType := varDouble;
-   TVarData(dest).VDouble := 0;
 end;
 
 // VarSetDefaultString
@@ -3626,28 +3625,6 @@ begin
       Inc(p2);
    end;
    Result:=0;
-end;
-
-// AsciiCompareText
-//
-function AsciiCompareText(p : PAnsiChar; const s : RawByteString) : Integer;
-var
-   n : Integer;
-begin
-   n:=Length(s);
-   if n>0 then
-      Result:=AsciiCompareLen(p, Pointer(s), n)
-   else Result:=0;
-   if Result=0 then
-      if p[n]<>#0 then
-         Result:=1;
-end;
-
-// AsciiSameText
-//
-function AsciiSameText(p : PAnsiChar; const s : RawByteString) : Boolean;
-begin
-   Result:=(AsciiCompareText(p, s)=0);
 end;
 
 // PosA
@@ -7731,6 +7708,39 @@ begin
       2 : Inc(Result, PopCount32(PWord(p)^));
       3 : Inc(Result, PopCount32((PWord(p)^ shl 16) or p[2]));
    end;
+end;
+
+// SwapInt64
+//
+procedure SwapInt64(var a, b : Int64);
+var
+   buf : Int64;
+begin
+   buf := a;
+   a := b;
+   b := buf;
+end;
+
+// SwapDoubles
+//
+procedure SwapDoubles(var a, b : Double);
+var
+   buf : Double;
+begin
+   buf := a;
+   a := b;
+   b := buf;
+end;
+
+// SwapPointers
+//
+procedure SwapPointers(var a, b : Pointer); inline;
+var
+   buf : Pointer;
+begin
+   buf := a;
+   a := b;
+   b := buf;
 end;
 
 // ------------------------------------------------------------------
