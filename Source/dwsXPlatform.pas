@@ -263,6 +263,7 @@ type
 function GetSystemMilliseconds : Int64;
 function UTCDateTime : TDateTime;
 function UnixTime : Int64;
+function EpochTimeStamp : Int64;
 
 function LocalDateTimeToUTCDateTime(t : TDateTime) : TDateTime;
 function UTCDateTimeToLocalDateTime(t : TDateTime) : TDateTime;
@@ -367,7 +368,8 @@ function FileMove(const existing, new : TFileName) : Boolean;
 function FileDelete(const fileName : TFileName) : Boolean;
 function FileRename(const oldName, newName : TFileName) : Boolean;
 function FileSize(const name : TFileName) : Int64;
-function FileDateTime(const name : TFileName; lastAccess : Boolean = False) : TdwsDateTime;
+function FileDateTime(const name : TFileName; lastAccess : Boolean = False) : TdwsDateTime; overload;
+function FileDateTime(hFile : THandle; lastAccess : Boolean = False) : TdwsDateTime; overload;
 procedure FileSetDateTime(hFile : THandle; const aDateTime : TdwsDateTime);
 function DeleteDirectory(const path : String) : Boolean;
 
@@ -529,7 +531,7 @@ begin
 
    // shortcut for UTF-8 BOM
    if Size >= 3 then begin
-      if (PWord(Base)^ = $BBEF) and (PAnsiChar(Base)[2] = #$00BF) then begin
+      if (PWord(Base)^ = $BBEF) and (Ord(PAnsiChar(Base)[2]) = $BF) then begin
          encoding := TEncoding.UTF8;
          Exit(3);
       end;
@@ -613,6 +615,23 @@ begin
    t.LowPart := ft.dwLowDateTime;
    t.HighPart := ft.dwHighDateTime;
    Result := (t.QuadPart - cUNIX_TIME_START) div cTICKS_PER_SECOND;
+end;
+
+// EpochTimeStamp
+//
+function EpochTimeStamp : Int64;
+const
+   cUNIX_TIME_START : Int64 = $019DB1DED53E8000;
+   cTICKS_PER_SECOND : Int64 = 10000000;  // 100ns
+   cEPOCH_TICKS_PER_SECOND : Int64 = 1000;
+var
+   ft : FILETIME;
+   t : TdwsLargeInteger;
+begin
+   GetSystemTimeAsFileTime(ft);
+   t.LowPart := ft.dwLowDateTime;
+   t.HighPart := ft.dwHighDateTime;
+   Result := (t.QuadPart - cUNIX_TIME_START) div (cTICKS_PER_SECOND div cEPOCH_TICKS_PER_SECOND);
 end;
 
 {$IFNDEF LINUX}
@@ -2264,6 +2283,26 @@ begin
    finally
       SysUtils.FindClose(searchRec);
    end;
+end;
+{$endif}
+
+// FileDateTime
+//
+function FileDateTime(hFile : THandle; lastAccess : Boolean = False) : TdwsDateTime; overload;
+{$ifdef WINDOWS}
+var
+   fileTime : TFileTime;
+begin
+   fileTime.dwLowDateTime := 0;
+   fileTime.dwHighDateTime := 0;
+   if lastAccess then
+      GetFileTime(hFile, nil, @fileTime, nil)
+   else GetFileTime(hFile, nil, nil, @fileTime);
+   Result.AsFileTime := fileTime;
+end;
+{$else}
+begin
+   Result.AsLocalDateTime := FileDateToDateTime(FileGetDate(hFile));
 end;
 {$endif}
 

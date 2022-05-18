@@ -204,10 +204,20 @@ type
       Info: TProgramInfo; ExtObject: TObject);
     procedure dwsWebClassesHttpQueryMethodsSetSynchronousRequestEval(
       Info: TProgramInfo; ExtObject: TObject);
+    procedure dwsWebClassesHttpQueryMethodsSetDisableRedirectsEval(
+      Info: TProgramInfo; ExtObject: TObject);
+    procedure dwsWebClassesHttpQueryMethodsSetConnectionPoolEval(
+      Info: TProgramInfo; ExtObject: TObject);
+    function dwsWebClassesWebResponseMethodsSetStatusJSONFastEval(
+      baseExpr: TTypedExpr; const args: TExprBaseListExec): Variant;
+    function dwsWebClassesWebResponseMethodsSetStatusRedirectFastEval(
+      baseExpr: TTypedExpr; const args: TExprBaseListExec): Variant;
   private
     { Private declarations }
     FServer :  IWebServerInfo;
     function GetServerEvents : IdwsHTTPServerEvents;
+    procedure CheckCookie(const name, value : String);
+
   public
     { Public declaration }
     property Server : IWebServerInfo read FServer write FServer;
@@ -234,10 +244,10 @@ var
    dyn : IScriptDynArray;
    buf : String;
 begin
-   buf := obj.AsString[obj.FieldAddress('ID')];
+   obj.EvalAsString(obj.FieldAddress('ID'), buf);
    if buf <> '' then
       Result := 'id: ' + StringToUTF8(buf) + #10;
-   buf := obj.AsString[obj.FieldAddress('Name')];
+   obj.EvalAsString(obj.FieldAddress('Name'), buf);
    if buf <> '' then
       Result := Result + 'event: ' + StringToUTF8(buf) + #10;
    i := obj.AsInteger[obj.FieldAddress('Retry')];
@@ -440,6 +450,12 @@ begin
    Info.ResultAsVariant := obj;
 end;
 
+procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetConnectionPoolEval(
+  Info: TProgramInfo; ExtObject: TObject);
+begin
+   HttpQuerySetConnectionPool(Info.Execution, Info.ParamAsString[0]);
+end;
+
 procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetConnectTimeoutMSecEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
@@ -456,6 +472,12 @@ procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetSynchronousRequestEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
    Info.Execution.CustomStates[cWinHttpSynchronousRequest]:=Info.ParamAsBoolean[0];
+end;
+
+procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetDisableRedirectsEval(
+  Info: TProgramInfo; ExtObject: TObject);
+begin
+   Info.Execution.CustomStates[cWinHttpDisabledRedirects]:=Info.ParamAsBoolean[0];
 end;
 
 procedure TdwsWebLib.dwsWebClassesHttpQueryMethodsSetReceiveTimeoutMSecEval(
@@ -788,7 +810,7 @@ begin
    if wr <> nil then begin
       args.EvalAsVariant(0, v);
       if (VarType(v) = varUnknown) and (TVarData(v).VUnknown <> nil) then begin
-         wr.ContentJSON := (IUnknown(TVarData(v).VUnknown) as IBoxedJSONValue).Value.ToUnicodeString
+         wr.ContentJSON := (IUnknown(TVarData(v).VUnknown) as IBoxedJSONValue).Value.ToUnicodeString;
       end else begin
          wr.ContentJSON := '';
       end;
@@ -842,16 +864,58 @@ begin
    end;
 end;
 
+function TdwsWebLib.dwsWebClassesWebResponseMethodsSetStatusRedirectFastEval(
+  baseExpr: TTypedExpr; const args: TExprBaseListExec): Variant;
+var
+   wr : TWebResponse;
+   status : Int64;
+begin
+   wr := args.WebResponse;
+   if wr <> nil then begin
+      status := args.AsInteger[0];
+      if (status < 300) or (status > 399) then
+         raise Exception.CreateFmt('Redirection status code should be in [300-399] range but got %d', [ status ]);
+      wr.StatusCode := status;
+      wr.Headers.Values['Location'] := args.AsString[1];
+   end;
+end;
+
+function TdwsWebLib.dwsWebClassesWebResponseMethodsSetStatusJSONFastEval(
+  baseExpr: TTypedExpr; const args: TExprBaseListExec): Variant;
+var
+   wr : TWebResponse;
+begin
+   wr := args.WebResponse;
+   if wr <> nil then begin
+      wr.StatusCode := args.AsInteger[0];
+      wr.ContentJSON := args.AsString[1];
+   end;
+end;
+
+// CheckCookie
+//
+procedure TdwsWebLib.CheckCookie(const name, value : String);
+begin
+   if not IsValidRFC6265CookieValue(name) then
+      raise Exception.Create('Cookie name contains characters not allowed by RFC 6265');
+   if not IsValidRFC6265CookieValue(value) then
+      raise Exception.Create('Cookie value contains characters not allowed by RFC 6265');
+end;
+
 procedure TdwsWebLib.dwsWebClassesWebResponseMethodsSetCookie_StringStringFloat_FastEvalNoResult(
   baseExpr: TTypedExpr; const args: TExprBaseListExec);
 var
    cookie : TWebResponseCookie;
    wr : TWebResponse;
+   name, value : String;
 begin
    wr := args.WebResponse;
    if wr <> nil then begin
-      cookie := wr.Cookies.AddCookie(args.AsString[0]);
-      cookie.Value := args.AsString[1];
+      args.EvalAsString(0, name);
+      args.EvalAsString(1, value);
+      CheckCookie(name, value);
+      cookie := wr.Cookies.AddCookie(name);
+      cookie.Value := value;
       cookie.ExpiresGMT := args.AsFloat[2];
    end;
 end;
@@ -861,11 +925,15 @@ procedure TdwsWebLib.dwsWebClassesWebResponseMethodsSetCookie_StringStringFloatS
 var
    cookie : TWebResponseCookie;
    wr : TWebResponse;
+   name, value : String;
 begin
    wr := args.WebResponse;
    if wr <> nil then begin
-      cookie := wr.Cookies.AddCookie(args.AsString[0]);
-      cookie.Value := args.AsString[1];
+      args.EvalAsString(0, name);
+      args.EvalAsString(1, value);
+      CheckCookie(name, value);
+      cookie := wr.Cookies.AddCookie(name);
+      cookie.Value := value;
       cookie.ExpiresGMT := args.AsFloat[2];
       cookie.Path := args.AsString[3];
       cookie.Domain := args.AsString[4];

@@ -46,7 +46,6 @@ type
          procedure SetAsFloat(addr : NativeInt; const value : Double);
          function GetAsBoolean(addr : NativeInt) : Boolean;
          procedure SetAsBoolean(addr : NativeInt; const value : Boolean);
-         function GetAsString(addr : NativeInt) : String;
          procedure SetAsString(addr : NativeInt; const value : String);
          function GetAsInterface(addr : NativeInt) : IUnknown;
          procedure SetAsInterface(addr : NativeInt; const value : IUnknown);
@@ -187,7 +186,7 @@ end;
 //
 function TArrayElementDataContext.GetAsBoolean(addr : NativeInt) : Boolean;
 begin
-   Result := FArray.AsBoolean[FIndex];
+   Result := FArray.AsBoolean[ComputeAddr(addr)];
 end;
 
 // SetAsBoolean
@@ -195,13 +194,6 @@ end;
 procedure TArrayElementDataContext.SetAsBoolean(addr : NativeInt; const value : Boolean);
 begin
    FArray.AsBoolean[ComputeAddr(addr)] := value;
-end;
-
-// GetAsString
-//
-function TArrayElementDataContext.GetAsString(addr : NativeInt) : String;
-begin
-   FArray.EvalAsString(ComputeAddr(addr), Result);
 end;
 
 // SetAsString

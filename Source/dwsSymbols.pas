@@ -151,6 +151,8 @@ type
       function Msgs : TdwsCompileMessageList;
       function Optimize : Boolean;
       function BaseSymbols : TdwsBaseSymbolsContext;
+      function GenericSymbol : TSymbol;
+      function GenericSymbolType : TSymbol;
 
       procedure EnterComposite(sym : TCompositeTypeSymbol);
       procedure LeaveComposite;
@@ -564,6 +566,11 @@ type
    end;
    TConstSymbolClass = class of TConstSymbol;
 
+   TScriptDataSymbolPurpose = (
+      sdspGeneral,         // general purpose / unspecified use case
+      sdspLoopIterator     // iterator variable in a for loop
+   );
+
    // variable: var x: Integer;
    TDataSymbol = class (TValueSymbol)
       protected
@@ -577,16 +584,12 @@ type
          procedure AllocateStackAddr(generator : TAddrGenerator);
 
          function IsWritable : Boolean; virtual;
+         function GetPurpose : TScriptDataSymbolPurpose; virtual;
 
          property Level : SmallInt read FLevel write FLevel;
          property UsedBySubLevel : Boolean read FUsedBySubLevel write FUsedBySubLevel;
          property StackAddr: Integer read FStackAddr write FStackAddr;
    end;
-
-   TScriptDataSymbolPurpose = (
-      sdspGeneral,         // general purpose / unspecified use case
-      sdspLoopIterator     // iterator variable in a for loop
-   );
 
    // used for script engine internal purposes
    TScriptDataSymbol = class sealed (TDataSymbol)
@@ -597,6 +600,7 @@ type
          constructor Create(const aName : String; aType : TTypeSymbol; aPurpose : TScriptDataSymbolPurpose = sdspGeneral);
          function Specialize(const context : ISpecializationContext) : TSymbol; override;
 
+         function GetPurpose : TScriptDataSymbolPurpose; override;
          property Purpose : TScriptDataSymbolPurpose read FPurpose write FPurpose;
    end;
 
@@ -802,7 +806,9 @@ type
 
    end;
 
-   TResultSymbol = class(TDataSymbol)
+   TResultSymbol = class sealed (TDataSymbol)
+      public
+         function Specialize(const context : ISpecializationContext) : TSymbol; override;
    end;
 
    TFuncSymbolFlag = (fsfStateless, fsfExternal, fsfType, fsfOverloaded, fsfLambda,
@@ -1911,6 +1917,8 @@ type
          function IsCompatibleWithAnyFuncSymbol : Boolean; override;
 
          procedure InitDataContext(const data : IDataContext; offset : Integer); override;
+
+         function SpecializeType(const context : ISpecializationContext) : TTypeSymbol; override;
    end;
 
    // Element of an enumeration type. E. g. "type DummyEnum = (Elem1, Elem2, Elem3);"
@@ -3687,6 +3695,17 @@ end;
 function TClassVarSymbol.IsVisibleFor(const aVisibility : TdwsVisibility) : Boolean;
 begin
    Result:=(FVisibility>=aVisibility);
+end;
+
+// ------------------
+// ------------------ TResultSymbol ------------------
+// ------------------
+
+// Specialize
+//
+function TResultSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
+begin
+   Result := TResultSymbol.Create(Name, context.SpecializeType(Typ));
 end;
 
 // ------------------
@@ -5798,7 +5817,9 @@ begin
 
       if Parent <> nil then
          specializedClass.InheritFrom( Parent );
-//         specializedClass.InheritFrom( context.Specialize(Parent) as TClassSymbol );  TODO
+
+      if context.GenericSymbolType = Self then
+         context.RegisterSpecialization(Self, specializedClass);
 
       SpecializeMembers(specializedClass, context);
       specializedClass.Initialize(context.Msgs);
@@ -5875,6 +5896,13 @@ end;
 procedure TNilSymbol.InitDataContext(const data : IDataContext; offset : Integer);
 begin
    data.SetNilInterface(offset);
+end;
+
+// SpecializeType
+//
+function TNilSymbol.SpecializeType(const context : ISpecializationContext) : TTypeSymbol;
+begin
+   Result := Self;
 end;
 
 // ------------------
@@ -6241,10 +6269,33 @@ begin
 end;
 
 function TConstSymbol.GetDescription : String;
+
+   function EncodeString : String;
+   var
+      nbApos, nbQuotes : Integer;
+   begin
+      FDataContext.EvalAsString(0, Result);
+      if Typ.UnAliasedTypeIs(TBaseStringSymbol) then begin
+         nbApos := StrCountChar(Result, '''');
+         if nbApos = 0 then
+            nbQuotes := 1
+         else nbQuotes := StrCountChar(Result, '"');
+         if nbApos < nbQuotes then begin
+            if nbApos > 0 then
+               Result := '''' + StringReplace(Result, '''', '''''', [ rfReplaceAll ]) + ''''
+            else Result := '''' + Result + '''';
+         end else begin
+            if nbQuotes > 0 then
+               Result := '"' + StringReplace(Result, '"', '""', [ rfReplaceAll ]) + '"'
+            else Result := '"' + Result + '"';
+         end;
+      end;
+   end;
+
 begin
    Result := 'const ' + inherited GetDescription + ' = ';
    if Typ.Size > 0 then
-      Result := Result + FDataContext.AsString[0]
+      Result := Result + EncodeString
    else Result := Result + '???';
 end;
 
@@ -6287,6 +6338,13 @@ begin
    Result := True;
 end;
 
+// GetPurpose
+//
+function TDataSymbol.GetPurpose : TScriptDataSymbolPurpose;
+begin
+   Result := sdspGeneral;
+end;
+
 // ------------------
 // ------------------ TScriptDataSymbol ------------------
 // ------------------
@@ -6304,6 +6362,13 @@ end;
 function TScriptDataSymbol.Specialize(const context : ISpecializationContext) : TSymbol;
 begin
    Result := TScriptDataSymbol.Create(Name, context.SpecializeType(Typ), Purpose);
+end;
+
+// GetPurpose
+//
+function TScriptDataSymbol.GetPurpose : TScriptDataSymbolPurpose;
+begin
+   Result := Purpose;
 end;
 
 // ------------------

@@ -18,6 +18,8 @@ unit dwsJSCodeGen;
 
 {$I dws.inc}
 
+{$define USE_LET_FOR_LOOP_VARS}
+
 interface
 
 uses
@@ -1059,7 +1061,7 @@ begin
 
    RegisterCodeGen(TdwsJSBlockExpr,       TJSRAWBlockExpr.Create);
 
-   RegisterCodeGen(TNullExpr,             TdwsExprGenericCodeGen.Create(['/* null */'#13#10]));
+   RegisterCodeGen(TNullExpr,             TdwsExprGenericCodeGen.Create(['/* null */'#10]));
    RegisterCodeGen(TNoResultWrapperExpr,  TJSNoResultWrapperExpr.Create);
 
    RegisterCodeGen(TConstExpr,            TJSConstExpr.Create);
@@ -1738,6 +1740,8 @@ var
 begin
    if cls.Name='' then Exit;
 
+   WriteSymbolVerbosity(cls);
+
    constructorSymbol:=cls.FindDefaultConstructor(cvPrivate);
 
    WriteString('function ');
@@ -1900,7 +1904,7 @@ begin
          for i:=0 to attributes.Count-1 do begin
             attrib:=attributes[i];
             if firstAttrib then begin
-               WriteString(#13#10#9'{ T: {ID:');
+               WriteString(#10#9'{ T: {ID:');
                firstAttrib:=False;
             end else WriteString(#9',{ T: {ID:');
             CompileRTTISymbolName(attrib.Symbol);
@@ -1917,7 +1921,7 @@ begin
          for i:=0 to publishedSymbols.Count-1 do begin
             symbol:=publishedSymbols[i];
             if firstAttrib then begin
-               WriteString(#13#10#9'{ T: {ID:');
+               WriteString(#10#9'{ T: {ID:');
                firstAttrib:=False;
             end else WriteString(#9',{ T: {ID:');
 
@@ -2395,12 +2399,12 @@ begin
 
    if not SmartLink(cls) then Exit;
 
-   WriteSymbolVerbosity(cls);
-
    if cls.IsExternalRooted then begin
       DoCompileExternalRootedClassSymbol(cls);
       Exit;
    end;
+
+   WriteSymbolVerbosity(cls);
 
    WriteString('var ');
    WriteSymbolName(cls);
@@ -2746,9 +2750,9 @@ var
       if dep.Code<>'' then begin
          WriteString(dep.Code);
          case dep.Code[Length(dep.Code)] of
-            ';', '}' : WriteString(#13#10);
+            ';', '}' : WriteString(#10);
          else
-            WriteString(';'#13#10);
+            WriteString(';'#10);
          end;
       end;
       FlushedDependencies.Add(dep.Name);
@@ -2799,7 +2803,7 @@ begin
          if not ForceRepeatableRandom then begin
             if not Dependencies.Contains('SetRandSeed') then begin
                if Dependencies.Remove('Random') then
-                  WriteString('var Random = Math.random;'#13#10);
+                  WriteString('var Random = Math.random;'#10);
             end;
          end;
          // stream dependencies
@@ -2814,7 +2818,7 @@ begin
             else if dependency='$ConditionalDefines' then begin
                WriteString('var $ConditionalDefines=');
                WriteStringArray((prog as TdwsProgram).Root.ConditionalDefines.Value);
-               WriteString(';'#13#10);
+               WriteString(';'#10);
             end;
             Dependencies.List.Delete(i);
          end;
@@ -2841,11 +2845,11 @@ begin
    destStream.WriteString('var $R = [');
    for i:=0 to resList.Count-1 do begin
       if i>0 then
-         destStream.WriteString(','#13#10#9)
-      else destStream.WriteString(#13#10#9);
+         destStream.WriteString(','#10#9)
+      else destStream.WriteString(#10#9);
       dwsJSON.WriteJavaScriptString(destStream, resList[i].Value);
    end;
-   destStream.WriteString('];'#13#10);
+   destStream.WriteString('];'#10);
 end;
 
 // GetNewTempSymbol
@@ -2906,7 +2910,7 @@ procedure TdwsJSCodeGen.WriteSymbolVerbosity(sym : TSymbol);
          WriteString(' ');
          WriteString(funcSym.QualifiedName);
          paramsDescr:=funcSym.ParamsDescription;
-         WriteString(StringReplace(paramsDescr, #13#10, '', [rfReplaceAll, rfIgnoreCase]));
+         WriteString(StringReplace(paramsDescr, #10, '', [rfReplaceAll, rfIgnoreCase]));
          if funcSym.Typ<>nil then begin
             WriteString(' : ');
             WriteString(funcSym.Typ.QualifiedName);
@@ -3773,7 +3777,7 @@ begin
             end;
             dest.WriteSubString(lineBuf, p, Length(lineBuf)-p+1);
          end;
-         dest.WriteString(#13#10);
+         dest.WriteString(#10);
       end;
    finally
       for i:=0 to High(sourceLines) do begin
@@ -3959,6 +3963,11 @@ begin
             end else begin
 
                jsCodeGen.FDeclaredLocalVars.Add(sym);
+
+               {$ifdef USE_LET_FOR_LOOP_VARS}
+               if sym.GetPurpose = sdspLoopIterator then continue;
+               {$endif}
+
                WriteVar;
 
                vpm := IsLocalVarParam(codeGen, sym);
@@ -8002,23 +8011,34 @@ procedure TJSForExpr.CodeGen(codeGen : TdwsCodeGen; expr : TExprBase);
 var
    tmpTo, tmpStep : String;
    e : TForExpr;
+   ownLoopIterator : Boolean;
    nonIncludedEnd : Boolean;
 begin
    e:=TForExpr(expr);
+
+   {$ifdef USE_LET_FOR_LOOP_VARS}
+   ownLoopIterator := (e.VarExpr.DataSymbol.GetPurpose = sdspLoopIterator);
+   {$else}
+   ownLoopIterator := False;
+   {$endif}
 
    // allocate temporary variables to hold bounds
    // in Pascal bounds and step are evaluated before the loop is entered
    if not e.ToExpr.IsConstant then begin
       tmpTo:=codeGen.GetNewTempSymbol;
-      codeGen.WriteString('var ');
-      codeGen.WriteString(tmpTo);
-      codeGen.WriteStatementEnd;
+      if not ownLoopIterator then begin
+         codeGen.WriteString('var ');
+         codeGen.WriteString(tmpTo);
+         codeGen.WriteStatementEnd;
+      end;
    end else tmpTo:='';
    if (e is TForStepExpr) and not (TForStepExpr(e).StepExpr.IsConstant) then begin
       tmpStep:=codeGen.GetNewTempSymbol;
-      codeGen.WriteString('var ');
-      codeGen.WriteString(tmpStep);
-      codeGen.WriteStatementEnd;
+      if not ownLoopIterator then begin
+         codeGen.WriteString('var ');
+         codeGen.WriteString(tmpStep);
+         codeGen.WriteStatementEnd;
+      end;
    end else tmpStep:='';
 
    // trigger special codegen in case of
@@ -8030,6 +8050,9 @@ begin
                        );
 
    codeGen.WriteString('for(');
+
+   if ownLoopIterator then
+      codeGen.WriteString('let ');
 
    // initialize loop variable
    codeGen.Compile(e.VarExpr);

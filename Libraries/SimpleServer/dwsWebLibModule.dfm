@@ -522,6 +522,36 @@ object dwsWebLib: TdwsWebLib
             Kind = mkClassProcedure
           end
           item
+            Name = 'SetStatusJSON'
+            Parameters = <
+              item
+                Name = 'status'
+                DataType = 'Integer'
+              end
+              item
+                Name = 'utf16json'
+                DataType = 'String'
+              end>
+            Attributes = [maStatic]
+            OnFastEval = dwsWebClassesWebResponseMethodsSetStatusJSONFastEval
+            Kind = mkClassProcedure
+          end
+          item
+            Name = 'SetStatusRedirect'
+            Parameters = <
+              item
+                Name = 'status'
+                DataType = 'Integer'
+              end
+              item
+                Name = 'location'
+                DataType = 'String'
+              end>
+            Attributes = [maStatic]
+            OnFastEval = dwsWebClassesWebResponseMethodsSetStatusRedirectFastEval
+            Kind = mkClassProcedure
+          end
+          item
             Name = 'SetETag'
             Parameters = <
               item
@@ -858,6 +888,30 @@ object dwsWebLib: TdwsWebLib
             OnEval = dwsWebClassesHttpQueryMethodsSetSynchronousRequestEval
             Visibility = cvPrivate
             Kind = mkClassProcedure
+          end
+          item
+            Name = 'SetDisableRedirects'
+            Parameters = <
+              item
+                Name = 'val'
+                DataType = 'Boolean'
+              end>
+            Attributes = [maClassMethod, maStatic]
+            OnEval = dwsWebClassesHttpQueryMethodsSetDisableRedirectsEval
+            Visibility = cvPrivate
+            Kind = mkClassProcedure
+          end
+          item
+            Name = 'SetConnectionPool'
+            Parameters = <
+              item
+                Name = 'poolName'
+                DataType = 'String'
+              end>
+            Attributes = [maClassMethod, maStatic]
+            OnEval = dwsWebClassesHttpQueryMethodsSetConnectionPoolEval
+            Visibility = cvPrivate
+            Kind = mkClassProcedure
           end>
         Properties = <
           item
@@ -878,9 +932,19 @@ object dwsWebLib: TdwsWebLib
             WriteAccess = 'SetKeepAlive'
           end
           item
+            Name = 'ConnectionPool'
+            DataType = 'String'
+            WriteAccess = 'SetConnectionPool'
+          end
+          item
             Name = 'SynchronousRequests'
             DataType = 'Boolean'
             WriteAccess = 'SetSynchronousRequests'
+          end
+          item
+            Name = 'DisableRedirects'
+            DataType = 'Boolean'
+            WriteAccess = 'SetDisableRedirects'
           end>
       end
       item
@@ -977,6 +1041,17 @@ object dwsWebLib: TdwsWebLib
             ResultType = 'HttpCertificateInfo'
             OnEval = dwsWebClassesHttpRequestMethodsGetCertificateInfoEval
             Kind = mkFunction
+          end>
+        Properties = <
+          item
+            Name = 'Header'
+            DataType = 'String'
+            ReadAccess = 'GetHeader'
+            Parameters = <
+              item
+                Name = 'name'
+                DataType = 'String'
+              end>
           end>
         OnCleanUp = dwsWebClassesHttpRequestCleanUp
       end
