@@ -449,22 +449,22 @@ type
    TAssignedExpr = class(TUnaryOpBoolExpr)
    end;
 
-   TAssignedInstanceExpr = class(TAssignedExpr)
+   TAssignedInstanceExpr = class sealed (TAssignedExpr)
    public
      function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
    end;
 
-   TAssignedInterfaceExpr = class(TAssignedExpr)
+   TAssignedInterfaceExpr = class sealed (TAssignedExpr)
    public
      function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
    end;
 
-   TAssignedMetaClassExpr = class(TAssignedExpr)
+   TAssignedMetaClassExpr = class sealed (TAssignedExpr)
    public
      function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
    end;
 
-   TAssignedFuncPtrExpr = class(TAssignedExpr)
+   TAssignedFuncPtrExpr = class sealed (TAssignedExpr)
    public
      function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
    end;
@@ -1736,7 +1736,7 @@ type
          procedure EvalNoResult(exec : TdwsExecution); override;
    end;
 
-   TStringArraySetExpr = class(TNoResultExpr)
+   TStringArraySetExpr = class (TNoResultExpr)
       private
          FStringExpr: TDataExpr;
          FIndexExpr: TTypedExpr;
@@ -1851,7 +1851,7 @@ var
 begin
    typ := dataSym.Typ.UnAliasedType;
    if dataSym.ClassType = TSelfSymbol then begin
-      if typ is TClassSymbol then
+      if typ.IsClassSymbol then
          Result := TSelfObjectVarExpr.Create(scriptPos, dataSym)
       else Result := TSelfVarExpr.Create(scriptPos, dataSym);
    end else if typ.Size = 1 then begin
@@ -1863,7 +1863,7 @@ begin
          Result := TStrVarExpr.Create(scriptPos, dataSym)
       else if typ.IsOfType(context.TypBoolean) then
          Result := TBoolVarExpr.Create(scriptPos, dataSym)
-      else if (typ is TClassSymbol) or (typ is TDynamicArraySymbol) then
+      else if typ.IsClassSymbol or (typ is TDynamicArraySymbol) then
          Result := TObjectVarExpr.Create(scriptPos, dataSym)
       else Result := TBaseTypeVarExpr.Create(scriptPos, dataSym)
    end else Result := TVarExpr.Create(scriptPos, dataSym);

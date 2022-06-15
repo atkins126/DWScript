@@ -6474,7 +6474,7 @@ procedure TProgramInfo.GetSymbolInfo(sym : TSymbol; var info : IInfo);
    begin
       SetLength(dat, sym.Typ.Size);
       extVDM := TExternalVarDataMaster.Create(Execution, TExternalVarSymbol(sym));
-      if sym.Typ is TClassSymbol then
+      if sym.Typ.IsClassSymbol then
          extVDM.Read(Execution, dat); // initialize 'Self'-Object
       Execution.DataContext_Create(dat, 0, locData);
       TInfo.SetChild(Result, Self, sym.Typ, locData, extVDM);
@@ -6484,7 +6484,7 @@ procedure TProgramInfo.GetSymbolInfo(sym : TSymbol; var info : IInfo);
    var
       locData : IDataContext;
    begin
-      if sym.BaseType is TClassSymbol then begin
+      if sym.BaseType.IsClassSymbol then begin
          Execution.DataContext_CreateEmpty(1, locData);
          Result := TInfoClassObj.Create(Self, sym, locData);
       end else Result:=nil;
@@ -6798,15 +6798,14 @@ var
    stackAddr : Integer;
    exec : TdwsExecution;
 begin
-   sym:=FuncSym.Result;
-   if sym=nil then
+   sym := FuncSym.Result;
+   if sym = nil then
       RaiseVariableNotFound(SYS_RESULT);
-   Assert(sym.InheritsFrom(TDataSymbol));
-   exec:=Execution;
-   if sym.Level=FLevel then
-      stackAddr:=sym.StackAddr+exec.Stack.BasePointer
-   else stackAddr:=sym.StackAddr+exec.Stack.GetSavedBp(Level);
-   Result:=@exec.Stack.Data[stackAddr];
+   exec := Execution;
+   if sym.Level = FLevel then
+      stackAddr := sym.StackAddr + exec.Stack.BasePointer
+   else stackAddr := sym.StackAddr + exec.Stack.GetSavedBp(Level);
+   Result := @exec.Stack.Data[stackAddr];
 end;
 
 procedure TProgramInfo.SetResultAsVariant(const Value: Variant);
@@ -6882,22 +6881,24 @@ end;
 function TProgramInfo.GetParamDataContext(index : Integer) : IDataContext;
 var
    ip : TSymbolTable;
-   sym : TDataSymbol;
+   sym : TSymbol;
+   dataSym : TDataSymbol;
    stackAddr : Integer;
    exec : TdwsExecution;
 begin
-   ip:=FuncSym.Params;
-   if Cardinal(index)>=Cardinal(ip.Count) then begin
+   ip := FuncSym.Params;
+   if Cardinal(index) >= Cardinal(ip.Count) then begin
       RaiseIncorrectParameterIndex(index);
-      Result:=nil;
+      Result := nil;
    end else begin
-      sym:=TDataSymbol(ip[index]);
-      Assert(sym.InheritsFrom(TDataSymbol));
-      exec:=Execution;
-      if sym.Level=FLevel then
-         stackAddr:=sym.StackAddr+exec.Stack.BasePointer
-      else stackAddr:=sym.StackAddr+exec.Stack.GetSavedBp(Level);
-      if sym.InheritsFrom(TByRefParamSymbol) then begin
+      sym := ip[index];
+      Assert(sym.IsDataSymbol);
+      dataSym := TDataSymbol(sym);
+      exec := Execution;
+      if dataSym.Level = FLevel then
+         stackAddr := dataSym.StackAddr+exec.Stack.BasePointer
+      else stackAddr := dataSym.StackAddr+exec.Stack.GetSavedBp(Level);
+      if dataSym.InheritsFrom(TByRefParamSymbol) then begin
          Result := IDataContext(IUnknown(Execution.Stack.Data[stackAddr]))
       end else Result := exec.Stack.CreateDataContext(exec.Stack.Data, stackAddr);
    end;
@@ -7050,7 +7051,7 @@ begin
     // Check current class type. If not found cycle object ancestry
     typeSym := FindSymbolInUnits(unitList, AObject.ClassName);
     // If no exact match found then look for supported ancestors
-    if Assigned(typeSym) and (typeSym is TClassSymbol) then
+    if typeSym.IsClassSymbol then
       Result := TClassSymbol(typeSym);
 
     // Allowed to look through ancestor types
@@ -7061,7 +7062,7 @@ begin
         ParentRTTI := GetTypeData(AObject.ClassInfo).ParentInfo;
         repeat
           typeSym := FindSymbolInUnits(unitList, String(ParentRTTI^.Name));
-          if Assigned(typeSym) and (typeSym is TClassSymbol) then       // match found, stop searching
+          if typeSym.IsClassSymbol then       // match found, stop searching
           begin
             Result := TClassSymbol(typeSym);
             Break;
@@ -7322,11 +7323,16 @@ function TScriptObjInstance.FieldAddress(const fieldName : String) : Integer;
 var
    clsSym : TClassSymbol;
    field : TFieldSymbol;
+   sym : TSymbol;
 begin
+   field := nil;
    clsSym := FClassSym;
    repeat
-      field := TFieldSymbol(clsSym.Members.FindLocal(fieldName, TFieldSymbol));
-      if field <> nil then break;
+      sym := clsSym.Members.FindLocal(fieldName);
+      if (sym <> nil) and (sym.ClassType = TFieldSymbol) then begin
+         field := TFieldSymbol(sym);
+         Break;
+      end;
       clsSym := clsSym.Parent;
    until clsSym = nil;
    if field = nil then

@@ -174,10 +174,10 @@ uses dwsJSON, dwsXPlatform, SynZip;
 {$R dwsJSRTL.res}
 
 const
-   cJSRTLDependencies : array [1..318{$ifdef JS_BIGINTEGER} + 16{$endif}] of TJSRTLDependency = (
+   cJSRTLDependencies : array [1..320{$ifdef JS_BIGINTEGER} + 16{$endif}] of TJSRTLDependency = (
       // codegen utility functions
       (Name : '$CheckStep';
-       Code : 'function $CheckStep(s,z) { if (s>0) return s; throw Exception.Create($New(Exception),"FOR loop STEP should be strictly positive: "+s.toString()+z); }';
+       Code : 'function $CheckStep(s,z) { if (s>0) return s; throw Exception.Create($New(Exception),"FOR loop STEP should be strictly positive: "+s.toString()+z) }';
        Dependency : 'Exception' ),
       (Name : '$W';  // only invoked from try..except codegen, which handles dependencies
        Code : 'function $W(e) { return e.ClassType?e:Exception.Create($New(Exception),(typeof e == "string") ? e : e.constructor.name+", "+e.message) }'),
@@ -246,22 +246,24 @@ const
       (Name : '$CmpNum';
        Code : 'function $CmpNum(a,b) { return a-b }' ),
       (Name : '$Check';
-       Code : 'function $Check(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Object not instantiated"+z); }';
+       Code : 'function $Check(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Object not instantiated"+z) }';
        Dependency : 'Exception' ),
       (Name : '$CheckIntf';
-       Code : 'function $CheckIntf(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Interface is nil"+z); }';
+       Code : 'function $CheckIntf(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Interface is nil"+z) }';
        Dependency : 'Exception' ),
       (Name : '$CheckFunc';
-       Code : 'function $CheckFunc(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Function pointer is nil"+z); }';
+       Code : 'function $CheckFunc(i,z) { if (i) return i; throw Exception.Create($New(Exception),"Function pointer is nil"+z) }';
        Dependency : 'Exception' ),
       (Name : '$Assert';
-       Code : 'function $Assert(b,m,z) { if (!b) throw Exception.Create($New(EAssertionFailed),"Assertion failed"+z+((m=="")?"":" : ")+m); }';
+       Code : 'function $Assert(b,m,z) { if (!b) throw Exception.Create($New(EAssertionFailed),"Assertion failed"+z+((m=="")?"":" : ")+m) }';
        Dependency : 'EAssertionFailed' ),
       (Name : '$CondFailed';
-       Code : 'function $CondFailed(z,m) { throw Exception.Create($New(EAssertionFailed),z+m); }';
+       Code : 'function $CondFailed(z,m) { throw Exception.Create($New(EAssertionFailed),z+m) }';
        Dependency : 'EAssertionFailed' ),
       (Name : '$Delete';
-       Code : 'function $Delete(o) { for (var m in o) delete o[m]; }' ),
+       Code : 'function $Delete(o) { for (var m in o) delete o[m] }' ),
+      (Name : '$DeleteV';
+       Code : 'function $DeleteV(o,v) { var r=o.hasOwnProperty(v); if (r) delete o[v]; return r }' ),
       (Name : '$Inh';
        Code : 'function $Inh(s,c) {'#10
                +#9'if (s===null) return false;'#10
@@ -543,11 +545,11 @@ const
       (Name : '$SetLiR';
        code : 'function $SetLiR(a,b) { for(var i=0;i<a.length;i++) if ((a[i]&b[i])!=a[i]) return !1; return !0 }'),
       (Name : '$SetAdd';
-       code : 'function $SetAdd(a,b) { var r=[],i=0; for(;i<a.length;i++) r.push(a[i]|b[i]); return r }'),
+       code : 'function $SetAdd(a,b) { for(var r=[],i=0;i<a.length;i++) r.push(a[i]|b[i]); return r }'),
       (Name : '$SetSub';
-       code : 'function $SetSub(a,b) { var r=[],i=0; for(;i<a.length;i++) r.push(a[i]&(~b[i])); return r }'),
+       code : 'function $SetSub(a,b) { for(var r=[],i=0;i<a.length;i++) r.push(a[i]&(~b[i])); return r }'),
       (Name : '$SetMul';
-       code : 'function $SetMul(a,b) { var r=[],i=0; for(;i<a.length;i++) r.push(a[i]&b[i]); return r }'),
+       code : 'function $SetMul(a,b) { for(var r=[],i=0;i<a.length;i++) r.push(a[i]&b[i]); return r }'),
 
       // RTL classes
 
@@ -759,7 +761,7 @@ const
        Code : 'var DateToWeekNumber = WeekNumber';
        Dependency : 'WeekNumber'),
       (Name : 'DayOfMonth';
-       Code : 'function DayOfMonth(v) { return DateTimeToDate(v, 1).getUTCDate(); }';
+       Code : 'function DayOfMonth(v) { return DateTimeToDate(v, 1).getUTCDate() }';
        Dependency: 'DateTimeToDate'),
       (Name : 'DayOfYear';
        Code : 'function DayOfYear(v) {'#10
@@ -807,11 +809,11 @@ const
        Code : 'function DegToRad(v) { return v*(Math.PI/180) }'),
       (Name : 'Delete';
        Code : 'function Delete(s,i,n) { var v=s.'+TdwsJSCodeGen.cBoxFieldName+'; if ((i<=0)||(i>v.length)||(n<=0)) return;'
-                                     +' s.'+TdwsJSCodeGen.cBoxFieldName+'=v.substr(0,i-1)+v.substr(i+n-1); }'),
+                                     +' s.'+TdwsJSCodeGen.cBoxFieldName+'=v.substr(0,i-1)+v.substr(i+n-1) }'),
       (Name : 'DivMod$_Integer_Integer_Integer_Integer_';
        Code : 'function DivMod$_Integer_Integer_Integer_Integer_(d1,d2,r1,r2) {'
                +'var r=$Div(d1, d2); r1.'+TdwsJSCodeGen.cBoxFieldName+'=r;'
-               +'r2.'+TdwsJSCodeGen.cBoxFieldName+'=d1-r*d2; }';
+               +'r2.'+TdwsJSCodeGen.cBoxFieldName+'=d1-r*d2 }';
        Dependency : '$Div' ),
       (Name : 'DupeString';
        Code : 'function DupeString(s,n) { return StringOfString(s,n) }';
@@ -831,7 +833,7 @@ const
       (Name : 'Exp';
        Code : 'var Exp = Math.exp'),
       (Name : 'Factorial';
-       Code : 'function Factorial(i) { var r=1; while (i>1) { r*=i; i--; } return r }'),
+       Code : 'function Factorial(i) { var r=1; while (i>1) { r*=i-- } return r }'),
       (Name : 'FirstDayOfMonth';
        Code : 'function FirstDayOfMonth(v, n) { '#10
                +#9'var o=DateTimeToDate(v, 1);'#10
@@ -878,9 +880,9 @@ const
       (Name : 'Frac';
        Code : 'function Frac(v) { return v-((v>0)?Math.floor(v):Math.ceil(v)) }'),
       (Name : 'FindDelimiter';
-       Code : 'function FindDelimiter(d,s,x) { var n=d.length,r=ns=s.length,i,p; for (i=0;i<n;i++) { p=s.indexOf(d.charAt(i),x-1); if (p>=0&&p<r) r=p; } return (r==ns)?-1:r+1; }'),
+       Code : 'function FindDelimiter(d,s,x) { var n=d.length,r=ns=s.length,i,p; for (i=0;i<n;i++) { p=s.indexOf(d.charAt(i),x-1); if (p>=0&&p<r) r=p } return (r==ns)?-1:r+1 }'),
       (Name : 'Gcd$_Integer_Integer_';
-       Code : 'function Gcd$_Integer_Integer_(a, b) { var r; while (b!=0) { r=a%b; a=b; b=r; } return a }'),
+       Code : 'function Gcd$_Integer_Integer_(a, b) { var r; while (b!=0) { r=a%b; a=b; b=r } return a }'),
       (Name : 'Haversine';
        Code : 'function Haversine(x1,y1,x2,y2,d,r) { var p=Math.PI/180, c=Math.cos, '
                   + 'k=1-c((x2-x1)*p)+c(x1*p)*c(x2*p)*(1-c((y2-y1)*p));'
@@ -920,7 +922,7 @@ const
        Code : 'function IncMilliSecond(v, n) { return v+n/864e5 }' ),
       (Name : 'Insert';
        Code : 'function Insert(s,d,i) { var v=d.'+TdwsJSCodeGen.cBoxFieldName+'; if (s=="") return; if (i<1) i=1; if (i>v.length) i=v.length+1;'
-               +'d.'+TdwsJSCodeGen.cBoxFieldName+'=v.substr(0,i-1)+s+v.substr(i-1); }'),
+               +'d.'+TdwsJSCodeGen.cBoxFieldName+'=v.substr(0,i-1)+s+v.substr(i-1) }'),
       (Name : 'Int';
        Code : 'function Int(v) { return (v>0)?Math.floor(v):Math.ceil(v) }'),
       (Name : 'IntPower$_Float_Integer_';
@@ -941,11 +943,11 @@ const
       (Name : 'IntToStr$_Integer_';
        Code : 'function IntToStr$_Integer_(i) { return i.toString() }'),
       (Name : 'IntToStr$_Integer_Integer_';
-       Code : 'function IntToStr$_Integer_Integer_(i) { return i.toString() }'),
+       Code : 'function IntToStr$_Integer_Integer_(i,b) { return i.toString(b) }'),
       (Name : 'IsDelimiter';
-       Code : 'function IsDelimiter(d,s,i) { if ((i<=0)||(i>s.length)) return false; else return d.indexOf(s.charAt(i-1))>=0; }'),
+       Code : 'function IsDelimiter(d,s,i) { if (i<=0||i>s.length) return false; else return d.indexOf(s.charAt(i-1))>=0 }'),
       (Name : 'IsLeapYear';
-       Code : 'function IsLeapYear(y) { return !(y % 4) && (y % 100) || !(y % 400) ? true : false; }'),
+       Code : 'function IsLeapYear(y) { return !(y % 4) && (y % 100) || !(y % 400) ? true : false }'),
       (Name : 'IsPrime$_Integer_';
        Code : 'function IsPrime$_Integer_(n) { if (n<=3) { return (n>=2) } else return ((n&1)&&(LeastFactor(n)==n)) }';
        Dependency : 'LeastFactor' ),
@@ -968,7 +970,7 @@ const
       (Name : 'Ln';
        Code : 'var Ln = Math.log'),
       (Name : 'LastDelimiter';
-       Code : 'function LastDelimiter(d,s) { var r=-1,n=d.length,i,p; for (i=0;i<n;i++) { p=s.lastIndexOf(d.charAt(i)); if (p>r) r=p; } return r+1;}'),
+       Code : 'function LastDelimiter(d,s) { var r=-1,n=d.length,i,p; for (i=0;i<n;i++) { p=s.lastIndexOf(d.charAt(i)); if (p>r) r=p } return r+1;}'),
       (Name : 'LeftStr';
        Code : 'function LeftStr(s,n) { return s.substr(0,n) }'),
       (Name : 'Log10';
@@ -996,7 +998,7 @@ const
       (Name : 'MinInt';
        Code : 'function MinInt(a,b) { return (a<b)?a:b }'),
       (Name : 'MonthOfYear';
-       Code : 'function MonthOfYear(v) { return DateTimeToDate(v, 1).getUTCMonth()+1; }';
+       Code : 'function MonthOfYear(v) { return DateTimeToDate(v, 1).getUTCMonth()+1 }';
        Dependency : 'DateTimeToDate'),
       (Name : 'NormalizeString';
        Code : 'function NormalizeString(s,f) { return s.normalize(f) }'),
@@ -1038,8 +1040,10 @@ const
                + #9'i = i + (i >> 16);'#10
                + #9'return i & 0x3f;'#10
             + '}'),
-      (Name : 'Pos';
-       Code : 'function Pos(a,b) { return b.indexOf(a)+1 }'),
+      (Name : 'Pos$_String_String_';
+       Code : 'function Pos$_String_String_(a,b) { return b.indexOf(a)+1 }'),
+      (Name : 'Pos$_String_String_Integer_';
+       Code : 'function Pos$_String_String_Integer_(a,b,o) { return b.indexOf(a,o-1)+1 }'),
       (Name : 'PosEx';
        Code : 'function PosEx(a,b,o) { return b.indexOf(a,o-1)+1 }'),
       (Name : 'Power';
@@ -1073,7 +1077,7 @@ const
       (Name : 'ReverseString';
        Code : 'function ReverseString(s) { return s.split("").reverse().join("") }'),
       (Name : 'RevPos';
-       Code : 'function RevPos(a,b) { return (a=="")?0:(b.lastIndexOf(a)+1) }'),
+       Code : 'function RevPos(a,b) { return a==""?0:b.lastIndexOf(a)+1 }'),
       (Name : 'RFC822ToDateTime';
        Code : 'function RFC822ToDateTime(s) { return (Date.parse(s)/864e5+25569)||0 }'),
       (Name : 'RightStr';
@@ -1084,7 +1088,7 @@ const
        Code : 'function SameText(a,b) { return a.toUpperCase()==b.toUpperCase() }'),
       (Name : 'SetLength';
        Code : 'function SetLength(s,n) { if (s.'+TdwsJSCodeGen.cBoxFieldName+'.length>n) s.'+TdwsJSCodeGen.cBoxFieldName+'=s.'+TdwsJSCodeGen.cBoxFieldName+'.substring(0,n);'
-                                       +'else while (s.'+TdwsJSCodeGen.cBoxFieldName+'.length<n) s.'+TdwsJSCodeGen.cBoxFieldName+'+=" "; }'),
+                                       +'else while (s.'+TdwsJSCodeGen.cBoxFieldName+'.length<n) s.'+TdwsJSCodeGen.cBoxFieldName+'+=" " }'),
       (Name : 'SetRandSeed';
        Code : 'function SetRandSeed(v) { Random = $alea(v) }';
        Dependency : 'Random'),
@@ -1112,7 +1116,7 @@ const
        Code : 'function StrBetween(s,d,f) { return StrBefore(StrAfter(s, d), f) }';
        Dependency: 'StrAfter'; Dependency2: 'StrBefore'),
       (Name : 'StrBeginsWith';
-       Code : 'function StrBeginsWith(s,b) { return (b.length > 0) ? s.substr(0, b.length)==b : false }'),
+       Code : 'function StrBeginsWith(s,b) { return b.length ? s.substr(0, b.length)==b : false }'),
       (Name : 'StrContains';
        Code : 'function StrContains(s,b) { return s.indexOf(b)>=0 }'),
       (Name : 'StrDeleteLeft';
@@ -1214,9 +1218,9 @@ const
        Code : 'function StrToXML(v) { return v.replace(/[&<>"'']/g, StrToXML.e) }'#10
               +'StrToXML.e = function(c) { return { "&":"&amp;", "<":"&lt;", ">":"&gt;", ''"'':"&quot;", "''":"&apos;" }[c] }' ),
       (Name : 'SubStr';
-       Code : 'function SubStr(s,f) { return s.substr(f-1) }'),
+       Code : 'function SubStr(s,f,n) { return s.substr(f-1,n) }'),
       (Name : 'SubString';
-       Code : 'function SubString(s,f,t) { return s.substr(f-1, t-2) }'),
+       Code : 'function SubString(s,f,t) { return t >= f ? s.substring(f-1, t-1) : "" }'),
       (Name : 'Sqr$_Integer_';
        Code : 'function Sqr$_Integer_(v) { return v*v }'),
       (Name : 'Sqr$_Float_';
@@ -1320,7 +1324,7 @@ const
                +#9'}'#10
                +'}'),
       (Name : 'YearOf';
-       Code : 'function YearOf(v) {return DateTimeToDate(v, 1).getUTCFullYear(); }';
+       Code : 'function YearOf(v) {return DateTimeToDate(v, 1).getUTCFullYear() }';
        Dependency : 'DateTimeToDate'),
       (Name : 'YearOfWeek';
        Code : 'function YearOfWeek(v) {'#10
@@ -1590,8 +1594,9 @@ begin
    FMagicCodeGens.AddObject('NormalizeString', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.normalize', '(', 1, ')']));
    FMagicCodeGens.AddObject('Odd$_Integer_', TdwsExprGenericCodeGen.Create(['(', '(', 0, '&1)==1', ')']));
    FMagicCodeGens.AddObject('Pi', TdwsExprGenericCodeGen.Create(['Math.PI']));
-   FMagicCodeGens.AddObject('Pos', TdwsExprGenericCodeGen.Create(['(', 1, '.indexOf', '(', 0, ')', '+1)']));
-   FMagicCodeGens.AddObject('PosEx', TdwsExprGenericCodeGen.Create(['(', 1, '.indexOf', '(', 0, ',', '(', 2, ')', '-1)+1)']));
+   FMagicCodeGens.AddObject('Pos$_String_String_', TdwsExprGenericCodeGen.Create(['(', 1, '.indexOf', '(', 0, ')', '+1', ')']));
+   FMagicCodeGens.AddObject('Pos$_String_String_Integer_', TdwsExprGenericCodeGen.Create(['(', 1, '.indexOf', '(', 0, ',', 2 + cgcgOffsetMinus1, ')', '+1', ')']));
+   FMagicCodeGens.AddObject('PosEx', TdwsExprGenericCodeGen.Create(['(', 1, '.indexOf', '(', 0, ',', 2 + cgcgOffsetMinus1, ')', '+1', ')']));
    FMagicCodeGens.AddObject('Power', TdwsExprGenericCodeGen.Create(['Math.pow', '(', 0, ',', 1, ')']));
    FMagicCodeGens.AddObject('Round', TdwsExprGenericCodeGen.Create(['Math.round', '(', 0, ')']));
    FMagicCodeGens.AddObject('Sign$_Float_', TdwsExprGenericCodeGen.Create(['$Sign', '(', 0, ')'], gcgExpression, '$Sign'));
@@ -1605,7 +1610,7 @@ begin
    FMagicCodeGens.AddObject('StrDeleteLeft', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.substring', '(', 1, ')']));
    // slice not very efficient in browsers right now
    // FMagicCodeGens.AddObject('StrDeleteRight', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.slice', '(0,-', '(', 1, ')', ')']));
-   FMagicCodeGens.AddObject('StrContains', TdwsExprGenericCodeGen.Create(['(', '(', 0, ')', '.indexOf', '(', 1, ')', '>=0)']));
+   FMagicCodeGens.AddObject('StrContains', TdwsExprGenericCodeGen.Create(['(', '(', 0, ')', '.indexOf', '(', 1, ')', '>=0', ')']));
    FMagicCodeGens.AddObject('StrFind', TJSStrFindExpr.Create);
    FMagicCodeGens.AddObject('StrJoin', TJSGenericSimpleMethodExpr.Create('.join(', ')'));
    FMagicCodeGens.AddObject('StrMatches', TJSStrMatchesFuncExpr.Create);
@@ -1617,7 +1622,7 @@ begin
    FMagicCodeGens.AddObject('StrToInt$_String_Integer_', TdwsExprGenericCodeGen.Create(['parseInt', '(', 0, ',', 1, ')']));
    FMagicCodeGens.AddObject('StrToJSON', TdwsExprGenericCodeGen.Create(['JSON.stringify', '(', 0, ')']));
    FMagicCodeGens.AddObject('SubStr', TJSStrCopyFuncExpr.Create);
-   FMagicCodeGens.AddObject('SubString', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.substr(', '(', 1, ')', '-1,', '(', 2, ')', '-2)']));
+   //FMagicCodeGens.AddObject('SubString', TdwsExprGenericCodeGen.Create(['(', 0, ')', '.substring(', '(', 1, ')', '-1,', '(', 2, ')', '-1)']));
    FMagicCodeGens.AddObject('Tan', TdwsExprGenericCodeGen.Create(['Math.tan', '(', 0, ')']));
    FMagicCodeGens.AddObject('TypeOf$_TClass_', TdwsExprGenericCodeGen.Create([0]));
    FMagicCodeGens.AddObject('UnixTime', TdwsExprGenericCodeGen.Create(['Math.trunc(Date.now()*1e-3)']));
