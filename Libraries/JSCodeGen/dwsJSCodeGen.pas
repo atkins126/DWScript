@@ -294,8 +294,8 @@ type
 
    TJSCompoundExpr = class (TJSExprCodeGen)
       Op, SpacedOp : String;
-      DynCompound : String;
-      constructor Create(const anOp, aDynCompound : String);
+      DynCompound, AssocCompound : String;
+      constructor Create(const anOp, aDynCompound, aAssocCompound : String);
       procedure CodeGen(codeGen : TdwsCodeGen; expr : TExprBase); override;
       procedure CodeGenRightExpr(codeGen : TdwsCodeGen; rightExpr : TTypedExpr); virtual;
    end;
@@ -1181,17 +1181,17 @@ begin
    RegisterCodeGen(TAppendStringVarExpr,  TJSAppendStringVarExpr.Create);
    RegisterCodeGen(TAppendConstStringVarExpr,      TJSAppendConstStringVarExpr.Create);
 
-   RegisterCodeGen(TPlusAssignIntExpr,    TJSCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TPlusAssignFloatExpr,  TJSCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TPlusAssignStrExpr,    TJSCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TPlusAssignExpr,       TJSCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TMinusAssignIntExpr,   TJSCompoundExpr.Create('-=', '$DIdxMinus'));
-   RegisterCodeGen(TMinusAssignFloatExpr, TJSCompoundExpr.Create('-=', '$DIdxMinus'));
-   RegisterCodeGen(TMinusAssignExpr,      TJSCompoundExpr.Create('-=', '$DIdxMinus'));
-   RegisterCodeGen(TMultAssignIntExpr,    TJSCompoundExpr.Create('*=', '$DIdxMult'));
-   RegisterCodeGen(TMultAssignFloatExpr,  TJSCompoundExpr.Create('*=', '$DIdxMult'));
-   RegisterCodeGen(TMultAssignExpr,       TJSCompoundExpr.Create('*=', '$DIdxMult'));
-   RegisterCodeGen(TDivideAssignExpr,     TJSCompoundExpr.Create('/=', '$DIdxDiv'));
+   RegisterCodeGen(TPlusAssignIntExpr,    TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TPlusAssignFloatExpr,  TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TPlusAssignStrExpr,    TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TPlusAssignExpr,       TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TMinusAssignIntExpr,   TJSCompoundExpr.Create('-=', '$DIdxMinus', '$AKeyMinus'));
+   RegisterCodeGen(TMinusAssignFloatExpr, TJSCompoundExpr.Create('-=', '$DIdxMinus', '$AKeyMinus'));
+   RegisterCodeGen(TMinusAssignExpr,      TJSCompoundExpr.Create('-=', '$DIdxMinus', '$AKeyMinus'));
+   RegisterCodeGen(TMultAssignIntExpr,    TJSCompoundExpr.Create('*=', '$DIdxMult', '$AKeyMult'));
+   RegisterCodeGen(TMultAssignFloatExpr,  TJSCompoundExpr.Create('*=', '$DIdxMult', '$AKeyMult'));
+   RegisterCodeGen(TMultAssignExpr,       TJSCompoundExpr.Create('*=', '$DIdxMult', '$AKeyMult'));
+   RegisterCodeGen(TDivideAssignExpr,     TJSCompoundExpr.Create('/=', '$DIdxDiv', '$AKeyDiv'));
 
    RegisterCodeGen(TIncIntVarExpr,
       TdwsExprGenericCodeGen.Create([0, '+=', -1], gcgStatement));
@@ -1503,11 +1503,11 @@ begin
    RegisterCodeGen(TBigIntegerOrOpExpr,          TJSBigIntegerBinOpExpr.Create('|', 7, [associativeLeft]));
    RegisterCodeGen(TBigIntegerXorOpExpr,         TJSBigIntegerBinOpExpr.Create('^', 8, [associativeLeft]));
 
-   RegisterCodeGen(TBigIntegerPlusAssignExpr,      TJSBigIntegerCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TBigIntegerPlusAssignIntExpr,   TJSBigIntegerCompoundExpr.Create('+=', '$DIdxAdd'));
-   RegisterCodeGen(TBigIntegerMinusAssignExpr,     TJSBigIntegerCompoundExpr.Create('-=', '$DIdxSub'));
-   RegisterCodeGen(TBigIntegerMinusAssignIntExpr,  TJSBigIntegerCompoundExpr.Create('-=', '$DIdxSub'));
-   RegisterCodeGen(TBigIntegerMultAssignExpr,      TJSBigIntegerCompoundExpr.Create('*=', '$DIdxMult'));
+   RegisterCodeGen(TBigIntegerPlusAssignExpr,      TJSBigIntegerCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TBigIntegerPlusAssignIntExpr,   TJSBigIntegerCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
+   RegisterCodeGen(TBigIntegerMinusAssignExpr,     TJSBigIntegerCompoundExpr.Create('-=', '$DIdxSub', '$AKeySub'));
+   RegisterCodeGen(TBigIntegerMinusAssignIntExpr,  TJSBigIntegerCompoundExpr.Create('-=', '$DIdxSub', '$AKeySub'));
+   RegisterCodeGen(TBigIntegerMultAssignExpr,      TJSBigIntegerCompoundExpr.Create('*=', '$DIdxMult', '$AKeyMult'));
 
    RegisterCodeGen(TBigIntegerEqualOpExpr,         TJSBigIntegerBinOpExpr.Create('==', 10, [associativeLeft]));
    RegisterCodeGen(TBigIntegerNotEqualOpExpr,      TJSBigIntegerBinOpExpr.Create('!=', 10, [associativeLeft]));
@@ -4382,34 +4382,33 @@ end;
 
 // Create
 //
-constructor TJSCompoundExpr.Create(const anOp, aDynCompound : String);
+constructor TJSCompoundExpr.Create(const anOp, aDynCompound, aAssocCompound : String);
 begin
    inherited Create;
    Op := anOp;
    SpacedOp := ' ' + anOp + ' ';
    DynCompound := aDynCompound;
+   AssocCompound := aAssocCompound;
 end;
 
 // CodeGen
 //
 procedure TJSCompoundExpr.CodeGen(codeGen : TdwsCodeGen; expr : TExprBase);
-var
-   e : TOpAssignExpr;
-   eDyn : TDynamicArrayExpr;
-begin
-   e:=TOpAssignExpr(expr);
 
-   if (cgoNoRangeChecks in codeGen.Options) or not (e.Left is TDynamicArrayExpr) then begin
-
+   procedure CodeGenDirect(e : TOpAssignExpr);
+   begin
       codeGen.CompileNoWrap(e.Left);
       if cgoOptimizeForSize in codeGen.Options then
          codeGen.WriteString(Op)
       else codeGen.WriteString(SpacedOp);
       CodeGenRightExpr(codeGen, e.Right);
+   end;
 
-   end else begin
-
-      eDyn:=TDynamicArrayExpr(e.Left);
+   procedure CodeGenDynCompound(e : TOpAssignExpr);
+   var
+      eDyn : TDynamicArrayExpr;
+   begin
+      eDyn := TDynamicArrayExpr(e.Left);
 
       codeGen.Dependencies.Add(DynCompound);
 
@@ -4423,8 +4422,40 @@ begin
       codeGen.WriteString(',');
       WriteLocationString(codeGen, expr);
       codeGen.WriteString(')');
-
    end;
+
+   procedure CodeGenAssocCompound(e : TOpAssignExpr);
+   var
+      eGet : TAssociativeArrayGetExpr;
+   begin
+      eGet := TAssociativeArrayGetExpr(e.Left);
+
+      codeGen.Dependencies.Add(AssocCompound);
+
+      codeGen.WriteString(AssocCompound);
+      codeGen.WriteString('(');
+      codeGen.Compile(eGet.BaseExpr);
+      codeGen.WriteString(',');
+      codeGen.CompileNoWrap(eGet.KeyExpr);
+      codeGen.WriteString(',');
+      TdwsJSCodeGen(codeGen).WriteDefaultValue(eGet.Typ, False);
+      codeGen.WriteString(',');
+      CodeGenRightExpr(codeGen, e.Right);
+      codeGen.WriteString(')');
+   end;
+
+var
+   e : TOpAssignExpr;
+begin
+   e := TOpAssignExpr(expr);
+
+   if e.Left is TDynamicArrayExpr then begin
+      if cgoNoRangeChecks in codeGen.Options then
+         CodeGenDirect(e)
+      else CodeGenDynCompound(e);
+   end else if e.Left is TAssociativeArrayGetExpr then begin
+      CodeGenAssocCompound(e);
+   end else CodeGenDirect(e);
 
    codeGen.WriteStatementEnd;
 end;
@@ -4734,36 +4765,39 @@ begin
 
    end;
 
-   if not funcSym.IsProperty then begin
+   if funcSym.IsProperty then begin
+      if e.Args.Count = 0 then Exit;
+      codeGen.WriteString('[');
+   end else codeGen.WriteString('(');
 
-      codeGen.WriteString('(');
-      CodeGenBeginParams(codeGen, e);
-      for i:=0 to e.Args.Count-1 do begin
-         if i>0 then
-            codeGen.WriteString(',');
-         paramExpr:=e.Args.ExprBase[i] as TTypedExpr;
-         paramSymbol:=funcSym.Params[i] as TParamSymbol;
-         if ShouldBoxParam(paramSymbol) then begin
-            if paramExpr is TVarExpr then
-               TJSVarExpr.CodeGenName(codeGen, TVarExpr(paramExpr))
-            else begin
-               codeGen.WriteString('{'+TdwsJSCodeGen.cBoxFieldName+':');
-               codeGen.Compile(paramExpr);
-               codeGen.WriteString('}');
-            end;
-         end else if paramSymbol is TLazyParamSymbol then begin
-            codeGen.WriteString('function () { return ');
+   CodeGenBeginParams(codeGen, e);
+   for i:=0 to e.Args.Count-1 do begin
+      if i>0 then
+         codeGen.WriteString(',');
+      paramExpr:=e.Args.ExprBase[i] as TTypedExpr;
+      paramSymbol:=funcSym.Params[i] as TParamSymbol;
+      if ShouldBoxParam(paramSymbol) then begin
+         if paramExpr is TVarExpr then
+            TJSVarExpr.CodeGenName(codeGen, TVarExpr(paramExpr))
+         else begin
+            codeGen.WriteString('{'+TdwsJSCodeGen.cBoxFieldName+':');
             codeGen.Compile(paramExpr);
             codeGen.WriteString('}');
-         end else if paramSymbol is TByRefParamSymbol then begin
-            codeGen.Compile(paramExpr);
-         end else begin
-            codeGen.CompileValue(paramExpr);
          end;
+      end else if paramSymbol is TLazyParamSymbol then begin
+         codeGen.WriteString('function () { return ');
+         codeGen.Compile(paramExpr);
+         codeGen.WriteString('}');
+      end else if paramSymbol is TByRefParamSymbol then begin
+         codeGen.Compile(paramExpr);
+      end else begin
+         codeGen.CompileValue(paramExpr);
       end;
-      codeGen.WriteString(')');
-
    end;
+
+   if funcSym.IsProperty then
+      codeGen.WriteString(']')
+   else codeGen.WriteString(')');
 end;
 
 // CodeGenNoWrap
@@ -9007,7 +9041,7 @@ begin
    info.Parameter['exprClass'].Value := expr.ClassName;
    info.Parameter['qualifiedName'].Value := expr.FuncSymQualifiedName;
 
-   dynArray := CreateNewDynamicArray(Environment.CodeGen.Context.Root.CompilerContext.TypVariant);
+   CreateNewDynamicArray(Environment.CodeGen.Context.Root.CompilerContext.TypVariant, dynArray);
    dynArray.ArrayLength := expr.SubExprCount;
 
    exec := Environment.Exec.ExecutionObject;

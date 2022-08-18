@@ -71,6 +71,7 @@ type
    TMethodFastEvalIntegerEvent = function(baseExpr : TTypedExpr; const args : TExprBaseListExec) : Int64 of object;
    TMethodFastEvalFloatEvent = function(baseExpr : TTypedExpr; const args : TExprBaseListExec) : Double of object;
    TMethodFastEvalBooleanEvent = function(baseExpr : TTypedExpr; const args : TExprBaseListExec) : Boolean of object;
+   TMethodFastEvalScriptObjEvent = procedure(baseExpr : TTypedExpr; const args : TExprBaseListExec; var result : IScriptObj) of object;
 
    // Symbol attributes information
    TdwsSymbolAttribute = class (TRefCountedObject)
@@ -1573,13 +1574,13 @@ type
          property PrevObject : TScriptObj read FPrevObject write FPrevObject;
    end;
 
-   TScriptObjInstance = class (TScriptObj, IScriptObj)
+   TScriptObjInstance = class sealed (TScriptObj, IScriptObj)
       private
-         FClassSym : TClassSymbol;
          FExternalObject : TObject;
+         FDestroyed : Boolean;
+         FClassSym : TClassSymbol;
          FExecutionContext : TdwsProgramExecution;
          FOnObjectDestroy : TObjectDestroyEvent;
-         FDestroyed : Boolean;
 
       protected
          function GetClassSym: TClassSymbol;
@@ -1593,6 +1594,9 @@ type
          constructor Create(aClassSym : TClassSymbol; executionContext : TdwsProgramExecution = nil);
          destructor Destroy; override;
          procedure BeforeDestruction; override;
+
+         class function NewInstance: TObject; override;
+         procedure FreeInstance; override;
 
          function ToString : String; override;
          function ScriptTypeName : String; override;
@@ -1711,8 +1715,11 @@ uses dwsFunctions, dwsCoreExprs, dwsMagicExprs, dwsMethodExprs, dwsUnifiedConsta
 // TScriptDynamicArray_InitData
 //
 procedure TScriptDynamicArray_InitData(elemTyp : TTypeSymbol; const resultDC : IDataContext; offset : NativeInt);
+var
+   intf : IScriptDynArray;
 begin
-   resultDC.AsInterface[offset] := CreateNewDynamicArray(elemTyp);
+   CreateNewDynamicArray(elemTyp, intf);
+   resultDC.AsInterface[offset] := intf;
 end;
 
 { TScriptObjectWrapper }
@@ -2075,8 +2082,11 @@ begin
             Debugger.NotifyException(Self, e.ExceptionObj);
          Msgs.AddRuntimeError(e.ScriptPos, e.Message, e.ScriptCallStack);
       end;
-      on e: EScriptError do
+      on e: EScriptError do begin
+         if IsDebugging then
+            Debugger.NotifyException(Self, nil);
          Msgs.AddRuntimeError(e.ScriptPos, e.Message, e.ScriptCallStack);
+      end;
       on e: EScriptStackException do
          Msgs.AddRuntimeError(LastScriptError.ScriptPos,
                               e.Message,
@@ -7224,27 +7234,27 @@ var
    externalClass : TClassSymbol;
    fieldIter : TFieldSymbol;
 begin
-   FClassSym:=aClassSym;
-   if aClassSym=nil then Exit;
+   FClassSym := aClassSym;
+   if aClassSym = nil then Exit;
 
-   if executionContext<>nil then
+   if executionContext <> nil then
       executionContext.ScriptObjCreated(Self);
 
    SetDataLength(aClassSym.ScriptInstanceSize);
 
    // initialize fields
-   fieldIter:=aClassSym.FirstField;
-   while fieldIter<>nil do begin
+   fieldIter := aClassSym.FirstField;
+   while fieldIter <> nil do begin
       fieldIter.InitDataContext(Self, 0);
-      fieldIter:=fieldIter.NextField;
+      fieldIter := fieldIter.NextField;
    end;
 
    // initialize OnObjectDestroy
-   externalClass:=aClassSym;
-   while (externalClass<>nil) and not Assigned(externalClass.OnObjectDestroy) do
-      externalClass:=externalClass.Parent;
-   if externalClass<>nil then
-      FOnObjectDestroy:=externalClass.OnObjectDestroy;
+   externalClass := aClassSym;
+   while (externalClass <> nil) and not Assigned(externalClass.OnObjectDestroy) do
+      externalClass := externalClass.Parent;
+   if externalClass <> nil then
+      FOnObjectDestroy := externalClass.OnObjectDestroy;
 end;
 
 // Destroy
@@ -7293,6 +7303,25 @@ begin
       ExecutionContext.ScriptObjDestroyed(Self);
    end;
    inherited;
+end;
+
+// NewInstance
+//
+var
+   vScriptObjTemplate : TClassInstanceTemplate<TScriptObjInstance>;
+class function TScriptObjInstance.NewInstance: TObject;
+begin
+   if not vScriptObjTemplate.Initialized then
+      Result := inherited NewInstance
+   else Result := vScriptObjTemplate.CreateInstance;
+end;
+
+// FreeInstance
+//
+procedure TScriptObjInstance.FreeInstance;
+begin
+   ClearData;
+   vScriptObjTemplate.ReleaseInstance(Self);
 end;
 
 // ToString
@@ -8409,10 +8438,14 @@ initialization
    TDynamicArraySymbol.SetInitDynamicArrayProc(TScriptDynamicArray_InitData);
    TAssociativeArraySymbol.SetInitAssociativeArrayProc(TScriptAssociativeArray_InitData);
 
+   vScriptObjTemplate.Initialize;
+
 finalization
 
    TdwsGuardianThread.Finalize;
    TdwsGuardianThread.vExecutionsPool.FreeAll;
+
+   vScriptObjTemplate.Finalize;
 
 end.
 

@@ -323,7 +323,8 @@ type
          stConstSymbol,
          stDataSymbol,
       stTypeSymbol,
-         stClassSymbol
+         stClassSymbol,
+         stAliasSymbol
    );
 
    // TSymbol
@@ -750,7 +751,7 @@ type
          function CanExpectAnyFuncSymbol : Boolean; virtual;
          function IsCompatibleWithAnyFuncSymbol : Boolean; virtual;
 
-         function  Taxonomy : TdwsSymbolTaxonomy; override;
+         function Taxonomy : TdwsSymbolTaxonomy; override;
 
          function DistanceTo(typeSym : TTypeSymbol) : Integer; virtual;
          // doesn't treat aliases of a type as the the same type,
@@ -1151,6 +1152,8 @@ type
          procedure InitDataContext(const data : IDataContext; offset : Integer); override;
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
          function IsPointerType : Boolean; override;
+
+         function Taxonomy : TdwsSymbolTaxonomy; override;
    end;
 
    // integer/String/float/boolean/variant
@@ -1232,6 +1235,9 @@ type
          FPseudoMethods : array [TArrayMethodKind] of TPseudoMethodSymbol;
 
       protected
+         class var vZeroDC : IDataContext;
+         class function GetZeroDC : IDataContext; static;
+
          function InitializePseudoMethodSymbol(methodKind : TArrayMethodKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; virtual;
 
       public
@@ -1311,9 +1317,6 @@ type
 
       protected
          function InitializePseudoMethodSymbol(methodKind : TArrayMethodKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; override;
-
-         class var vZeroDC : IDataContext;
-         class function GetZeroDC : IDataContext; static;
 
       public
          constructor Create(const name : String; elementType, indexType : TTypeSymbol);
@@ -7657,6 +7660,17 @@ end;
 // ------------------ TTypeWithPseudoMethodsSymbol ------------------
 // ------------------
 
+// GetZeroDC
+//
+class function TTypeWithPseudoMethodsSymbol.GetZeroDC : IDataContext;
+begin
+   if vZeroDC = nil then begin
+      vZeroDC := TDataContext.CreateStandalone(1);
+      vZeroDC.SetZeroInt64(0);
+   end;
+   Result := vZeroDC;
+end;
+
 // InitializePseudoMethodSymbol
 //
 function TTypeWithPseudoMethodsSymbol.InitializePseudoMethodSymbol(methodKind : TArrayMethodKind; baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol;
@@ -7737,6 +7751,17 @@ begin
       amkHigh, amkLow : begin
          Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
          Result.Typ := IndexType;
+      end;
+      amkIndexOf : begin
+         Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
+         Result.Params.AddSymbol(TParamSymbol.Create('item', Typ));
+         Result.Params.AddSymbol(TParamSymbolWithDefaultValue.Create('index', baseSymbols.TypInteger, GetZeroDC));
+         Result.Typ := baseSymbols.TypInteger;
+      end;
+      amkContains : begin
+         Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
+         Result.Params.AddSymbol(TParamSymbol.Create('item', Typ));
+         Result.Typ := baseSymbols.TypBoolean;
       end;
    end;
    if Result <> nil then
@@ -7917,17 +7942,6 @@ begin
    if Result <> nil then
       FPseudoMethods[methodKind] := Result
    else Result := inherited InitializePseudoMethodSymbol(methodKind, baseSymbols);
-end;
-
-// GetZeroDC
-//
-class function TDynamicArraySymbol.GetZeroDC : IDataContext;
-begin
-   if vZeroDC = nil then begin
-      vZeroDC := TDataContext.CreateStandalone(1);
-      vZeroDC.SetZeroInt64(0);
-   end;
-   Result := vZeroDC;
 end;
 
 // IsCompatible
@@ -8463,6 +8477,13 @@ end;
 function TAliasSymbol.IsPointerType : Boolean;
 begin
    Result:=Typ.IsPointerType;
+end;
+
+// Taxonomy
+//
+function TAliasSymbol.Taxonomy : TdwsSymbolTaxonomy;
+begin
+   Result := [ stTypeSymbol, stAliasSymbol ];
 end;
 
 // DoIsOfType

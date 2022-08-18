@@ -54,6 +54,9 @@ type
          class function DynamicArrayAdd(context : TdwsCompilerContext; baseExpr : TTypedExpr;
                                         const scriptPos : TScriptPos; argExpr : TTypedExpr) : TArrayPseudoMethodExpr; overload; static;
 
+         class function ArrayContains(context : TdwsCompilerContext; const scriptPos : TScriptPos;
+                                      arrayExpr, elementExpr : TTypedExpr) : TTypedExpr; static;
+
          class function ArrayConcat(context : TdwsCompilerContext; const hotPos : TScriptPos;
                                     left, right : TTypedExpr) : TArrayConcatExpr; static;
    end;
@@ -123,7 +126,9 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsGenericExprs, dwsSymbolDictionary;
+uses
+   dwsGenericExprs, dwsSymbolDictionary,
+   dwsArrayIndexOfExprs, dwsRelExprs;
 
 // NameToArrayMethod
 //
@@ -444,6 +449,8 @@ begin
             Result := TMagicMethodFloatExpr.Create(context, scriptPos, magicMethodSym, expr)
          else if Assigned(magicMethodSym.OnFastEvalNoResult) then
             Result := TMagicMethodNoResultExpr.Create(context, scriptPos, magicMethodSym, expr)
+         else if Assigned(magicMethodSym.OnFastEvalScriptObj) then
+            Result := TMagicMethodScriptObjExpr.Create(context, scriptPos, magicMethodSym, expr)
          else Result := TMagicMethodExpr.Create(context, scriptPos, magicMethodSym, expr);
       end;
 
@@ -496,7 +503,7 @@ begin
                if RefKind=rkClassOfRef then
                   context.Msgs.AddCompilerError(scriptPos, CPE_StaticMethodExpected)
                else if expr.Typ is TClassOfSymbol then
-                  context.Msgs.AddCompilerError(scriptPos, CPE_ClassMethodExpected);
+                  context.Msgs.AddCompilerError(scriptPos, CPE_ClassMethodOrConstructorExpected);
                if not (cfoForceStatic in options) and meth.IsVirtual then
                   Result := TMethodVirtualExpr.Create(context, scriptPos, meth, expr)
                else Result := TMethodStaticExpr.Create(context, scriptPos, meth, expr);
@@ -917,6 +924,26 @@ begin
       end;
    end;
    argList.Clear;
+end;
+
+// ArrayContains
+//
+class function CompilerUtils.ArrayContains(
+      context : TdwsCompilerContext; const scriptPos : TScriptPos;
+      arrayExpr, elementExpr : TTypedExpr
+   ) : TTypedExpr;
+var
+   indexOfExprClass : TArrayIndexOfExprClass;
+begin
+   indexOfExprClass := TArrayIndexOfExpr.ArrayIndexOfExprClass(arrayExpr.Typ as TArraySymbol);
+   Result := indexOfExprClass.Create(context, scriptPos, arrayExpr, elementExpr, nil);
+   if indexOfExprClass.InheritsFrom(TStaticArrayIndexOfExpr) then begin
+      TStaticArrayIndexOfExpr(Result).ForceZeroBased := True;
+      if arrayExpr.Typ.ClassType <> TStaticArraySymbol then
+         context.Msgs.AddCompilerError(scriptPos, CPE_IncompatibleOperands);
+   end;
+   Result := TRelGreaterEqualIntExpr.Create(context, scriptPos, ttIN, Result,
+                                            TTypedExpr(context.CreateInteger(0)));
 end;
 
 // ArrayConcat

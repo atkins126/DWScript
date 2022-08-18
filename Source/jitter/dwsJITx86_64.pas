@@ -511,13 +511,13 @@ type
    Tx86MultInt = class (TdwsJITter_x86)
       function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
    end;
-{   Tx86MultIntPow2 = class (TdwsJITter_x86)
-      function CompileInteger(expr : TTypedExpr) : Integer; override;
+   Tx86MultIntPow2 = class (TdwsJITter_x86)
+      function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
    end;
    Tx86DivInt = class (Tx86InterpretedExpr)
-      function CompileInteger(expr : TTypedExpr) : Integer; override;
+      function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
    end;
-   Tx86ModInt = class (Tx86InterpretedExpr)
+{   Tx86ModInt = class (Tx86InterpretedExpr)
       function CompileInteger(expr : TTypedExpr) : Integer; override;
    end;
    Tx86ModFloat = class (TdwsJITter_x86)
@@ -658,6 +658,13 @@ type
    Tx86SqrFloatFunc = class (Tx86SqrFloat)
       function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
    end;
+
+   Tx86ScaleFloatFunc = class (Tx86MagicFunc)
+      FScale : Double;
+      constructor Create(jit : TdwsJITx86_64; const aScale : Double);
+      function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
+   end;
+
 {
    Tx86MinMaxFloatFunc = class (Tx86MagicFunc)
       public
@@ -768,21 +775,6 @@ begin
    Result := Math.Power(base, exponent);
 end;
 
-function double_cos(const v : Double) : Double;
-begin
-   Result:=Cos(v);
-end;
-
-function double_sin(const v : Double) : Double;
-begin
-   Result:=Sin(v);
-end;
-
-function double_tan(const v : Double) : Double;
-begin
-   Result:=Tan(v);
-end;
-
 var
    vAddr_Exp : function (const v : Double) : Double = double_exp;
    vAddr_Ln : function (const v : Double) : Double = double_ln;
@@ -799,9 +791,17 @@ var
    vAddr_IsInfinite : function (const v : Double) : Boolean = Math.IsInfinite;
    vAddr_IsFinite : function (const v : Double) : Boolean = dwsMathFunctions.IsFinite;
    vAddr_IsPrime : function (const n : Int64) : Boolean = dwsMathFunctions.IsPrime;
-   vAddr_Cos : function (const v : Double) : Double = double_cos;
-   vAddr_Sin : function (const v : Double) : Double = double_sin;
-   vAddr_Tan : function (const v : Double) : Double = double_tan;
+   vAddr_Cos : function (const v : Double) : Double = System.Cos;
+   vAddr_ArcCos : function (const v : Double) : Double = Math.ArcCos;
+   vAddr_Sin : function (const v : Double) : Double = System.Sin;
+   vAddr_ArcSin : function (const v : Double) : Double = Math.ArcSin;
+   vAddr_Tan : function (const v : Double) : Double = Math.Tan;
+   vAddr_ArcTan : function (const v : Double) : Double = System.ArcTan;
+   vAddr_CoTan : function (const v : Double) : Double = Math.Cotan;
+   vAddr_ArcTan2 : function (const x, y : Double) : Double = Math.ArcTan2;
+   vAddr_Hypot : function (const x, y : Double) : Double = Math.Hypot;
+   vAddr_SignFloat : function (const x : Double) : Int64 = SignFloat;
+   vAddr_SignInt : function (const x : Int64) : Int64 = SignInt64;
 
 // ------------------
 // ------------------ TdwsJITx86_64 ------------------
@@ -962,11 +962,12 @@ begin
    RegisterJITter(TSubIntExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_sub, False));
    RegisterJITter(TMultIntExpr,                 Tx86MultInt.Create(Self));
    RegisterJITter(TSqrIntExpr,                  FInterpretedJITter.IncRefCount);
-   RegisterJITter(TDivExpr,                     FInterpretedJITter.IncRefCount);// Tx86DivInt.Create(Self));
-   RegisterJITter(TDivConstExpr,                FInterpretedJITter.IncRefCount);// Tx86DivInt.Create(Self));
+   //RegisterJITter(TDivExpr,                     FInterpretedJITter.IncRefCount);
+   RegisterJITter(TDivExpr,                     Tx86DivInt.Create(Self));
+   RegisterJITter(TDivConstExpr,                Tx86DivInt.Create(Self));
    RegisterJITter(TModExpr,                     FInterpretedJITter.IncRefCount);// Tx86ModInt.Create(Self));
    RegisterJITter(TModConstExpr,                FInterpretedJITter.IncRefCount);// Tx86ModInt.Create(Self));
-   RegisterJITter(TMultIntPow2Expr,             FInterpretedJITter.IncRefCount);// Tx86MultIntPow2.Create(Self));
+   RegisterJITter(TMultIntPow2Expr,             Tx86MultIntPow2.Create(Self));
    RegisterJITter(TIntAndExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_and));
    RegisterJITter(TIntXorExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_xor));
    RegisterJITter(TIntOrExpr,                   Tx86IntegerBinOpExpr.Create(Self, gpOp_or));
@@ -1102,14 +1103,28 @@ begin
    RegisterJITter(TCeilFunc,                    Tx86DirectCallFunc.Create(Self, @vAddr_Ceil));
    RegisterJITter(TTruncFunc,                   Tx86DirectCallFunc.Create(Self, @vAddr_Trunc));
    RegisterJITter(TFracFunc,                    Tx86DirectCallFunc.Create(Self, @vAddr_Frac));
+
+   RegisterJITter(TSignFunc,                    Tx86DirectCallFunc.Create(Self, @vAddr_SignFloat));
+   RegisterJITter(TSignIntFunc,                 Tx86DirectCallFunc.Create(Self, @vAddr_SignInt));
+
    RegisterJITter(TIsNaNFunc,                   Tx86DirectCallFunc.Create(Self, @vAddr_IsNaN));
    RegisterJITter(TIsInfiniteFunc,              FInterpretedJITter.IncRefCount);// Tx86DirectCallFunc.Create(Self, @@vAddr_IsInfinite));
    RegisterJITter(TIsFiniteFunc,                FInterpretedJITter.IncRefCount);// Tx86DirectCallFunc.Create(Self, @@vAddr_IsFinite));
    RegisterJITter(TIsPrimeFunc,                 FInterpretedJITter.IncRefCount);// Tx86DirectCallFunc.Create(Self, @@vAddr_IsPrime));
 
    RegisterJITter(TCosFunc,                     Tx86DirectCallFunc.Create(Self, @vAddr_Cos));
+   RegisterJITter(TArcCosFunc,                  Tx86DirectCallFunc.Create(Self, @vAddr_ArcCos));
    RegisterJITter(TSinFunc,                     Tx86DirectCallFunc.Create(Self, @vAddr_Sin));
+   RegisterJITter(TArcSinFunc,                  Tx86DirectCallFunc.Create(Self, @vAddr_ArcSin));
    RegisterJITter(TTanFunc,                     Tx86DirectCallFunc.Create(Self, @vAddr_Tan));
+   RegisterJITter(TArcTanFunc,                  Tx86DirectCallFunc.Create(Self, @vAddr_ArcTan));
+   RegisterJITter(TCotanFunc,                   Tx86DirectCallFunc.Create(Self, @vAddr_CoTan));
+
+   RegisterJITter(TArcTan2Func,                 Tx86DirectCallFunc.Create(Self, @vAddr_ArcTan2));
+   RegisterJITter(THypotFunc,                   Tx86DirectCallFunc.Create(Self, @vAddr_Hypot));
+
+   RegisterJITter(TDegToRadFunc,                Tx86ScaleFloatFunc.Create(Self, PI/180));
+   RegisterJITter(TRadToDegFunc,                Tx86ScaleFloatFunc.Create(Self, 180/PI));
 
    RegisterJITter(TOddFunc,                     Tx86OddFunc.Create(Self));
 
@@ -4509,76 +4524,105 @@ begin
    jit.ReleaseGPReg(rightReg);
 end;
 
-{
 // ------------------
 // ------------------ Tx86MultIntPow2 ------------------
 // ------------------
 
-// CompileInteger
+// DoCompileInteger
 //
-function Tx86MultIntPow2.CompileInteger(expr : TTypedExpr) : Integer;
+function Tx86MultIntPow2.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
 var
    e : TMultIntPow2Expr;
+   srcReg : TgpRegister64;
 begin
-   e:=TMultIntPow2Expr(expr);
+   e := TMultIntPow2Expr(expr);
 
-   Result:=jit.CompileInteger(e.Expr);
-   x86._shl_eaxedx_imm(e.Shift+1);
+   srcReg := jit.CompileIntegerToRegister(e.Expr);
+   if jit.IsSymbolGPReg(srcReg) then begin
+      jit.ReleaseGPReg(srcReg);
+      Result := jit.AllocGPReg(expr);
+      x86._mov_reg_reg(Result, srcReg);
+   end else begin
+      Result := srcReg;
+      jit.SetContainsGPReg(Result, expr);
+   end;
+   x86._shift_reg_imm(gpShl, Result, e.Shift+1);
 end;
 
 // ------------------
 // ------------------ Tx86DivInt ------------------
 // ------------------
 
-// CompileInteger
+// DoCompileInteger
 //
-function Tx86DivInt.CompileInteger(expr : TTypedExpr) : Integer;
-
-   procedure DivideByPowerOfTwo(p : Integer);
-   begin
-      x86._mov_reg_reg(gprECX, gprEDX);
-      x86._shift_reg_imm(gpShr, gprECX, 32-p);
-      x86._add_reg_reg(gprEAX, gprECX);
-      x86._adc_reg_int32(gprEDX, 0);
-      x86._sar_eaxedx_imm(p);
-   end;
-
+var
+   cPtr_TDivExpr_RaiseDivisionByZero : Pointer = @TDivExpr.RaiseDivisionByZero;
+function Tx86DivInt.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
 var
    e : TDivExpr;
    d : Int64;
    i : Integer;
+   dividerStackOffset : Integer;
+   leftReg, rightReg : TgpRegister64;
+   divByZeroCheckPassed : TFixupJump;
 begin
    e:=TDivExpr(expr);
 
-   Result:=jit.CompileInteger(e.Left);
+   leftReg := jit.CompileIntegerToRegister(e.Left);
 
    if e.Right is TConstIntExpr then begin
 
-      d:=TConstIntExpr(e.Right).Value;
-      if d=1 then begin
+      d := TConstIntExpr(e.Right).Value;
+      if d = 1 then begin
+         Result := leftReg;
          Exit;
       end;
 
-      if d>0 then begin
+      if d > 0 then begin
          // is it a power of two?
-         i:=WhichPowerOfTwo(d);
-         if (i>0) and (i<=31) then begin
-            DivideByPowerOfTwo(i);
+         i := WhichPowerOfTwo(d);
+         if (i > 0) and (i <= 63) then begin
+            Result := jit.AllocGPReg(expr);
+            x86._mov_reg_reg(Result, leftReg);
+            jit.ReleaseGPReg(leftReg);
+            x86._shift_reg_imm(gpSar, Result, i);
             Exit;
          end;
       end;
 
    end;
 
-   x86._push_reg(gprEDX);
-   x86._push_reg(gprEAX);
+   rightReg := jit.CompileIntegerToRegister(e.Right);
 
-   jit.CompileInteger(e.Right);
-   x86._push_reg(gprEDX);
-   x86._push_reg(gprEAX);
+   x86._test_reg_reg(rightReg, rightReg);
 
-   x86._call_absmem(@@vAddr_div);
+   divByZeroCheckPassed := jit.Fixups.NewJump(flagsNZ);
+
+      jit._mov_reg_execInstance(gprRDX);
+      x86._mov_reg_imm(gprRCX, QWORD(expr));
+      x86._call_absmem(cPtr_TDivExpr_RaiseDivisionByZero);
+
+   divByZeroCheckPassed.NewTarget(True);
+
+   dividerStackOffset := jit.Preamble.AllocateStackSpace(SizeOf(Int64));
+   x86._mov_qword_ptr_reg_reg(gprRBP, dividerStackOffset, rightReg);
+
+   jit.ReleaseGPReg(rightReg);
+
+   x86._mov_reg_reg(gprRAX, leftReg);
+   jit.ReleaseGPReg(leftReg);
+
+   x86._cqo;
+   x86._idiv_qword_ptr_reg(gprRBP, dividerStackOffset);
+
+   jit.FGPRegs[gprRAX].Flush;
+   jit.FGPRegs[gprRDX].Flush;
+
+   Result := jit.AllocGPReg(expr);
+   x86._mov_reg_reg(Result, gprRAX);
+
 end;
+{
 
 // ------------------
 // ------------------ Tx86ModInt ------------------
@@ -5298,8 +5342,9 @@ var
    i : Integer;
    p : TParamSymbol;
    paramReg : array of TxmmRegister;
+   gpr : TgpRegister64;
 begin
-   Result:=False;
+   Result := False;
 
    Assert(funcSym.Params.Count <= 2); // TODO support different number of parameters
 
@@ -5309,6 +5354,11 @@ begin
       p:=funcSym.Params[i];
       if jit.IsFloat(p.Typ) then begin
          paramReg[i] := jit.CompileFloat(args[i] as TTypedExpr);
+      end else if jit.IsInteger(p.Typ) and (funcSym.Params.Count = 1) then begin
+         paramReg[i] := xmmNone;
+         gpr := jit.CompileIntegerToRegister(args[i] as TTypedExpr);
+         x86._mov_reg_reg(gprRCX, gpr);
+         jit.ReleaseGPReg(gpr);
       end else Exit;
    end;
 
@@ -5345,6 +5395,11 @@ begin
 
       Result := jit.AllocXMMReg(expr);
       x86._movsd_reg_reg(Result, xmm0);
+
+   end else if jit.IsInteger(e.FuncSym.Typ) then begin
+
+      Result := jit.AllocXMMReg(expr);
+      x86._cvtsi2sd(Result, gprRAX);
 
    end else begin
 
@@ -5487,6 +5542,39 @@ function Tx86SqrFloatFunc.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
 begin
    Result:=CompileFloatOperand(expr, TMagicFuncExpr(expr).Args[0] as TTypedExpr);
 end;
+
+// ------------------
+// ------------------ Tx86ScaleFloatFunc ------------------
+// ------------------
+
+// Create
+//
+constructor Tx86ScaleFloatFunc.Create(jit : TdwsJITx86_64; const aScale : Double);
+begin
+   inherited Create(jit);
+   FScale := aScale;
+end;
+
+// DoCompileFloat
+//
+function Tx86ScaleFloatFunc.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
+var
+   operand : TxmmRegister;
+begin
+   operand := jit.CompileFloat(TTypedExpr(expr.SubExpr[0]));
+
+   if jit.IsSymbolXMMReg(operand) then begin
+      Result := jit.AllocXMMReg(expr);
+      jit._movsd_reg_imm(Result, FScale);
+      jit.x86._xmm_reg_reg(xmm_multsd, Result, operand);
+      jit.ReleaseXMMReg(operand);
+   end else begin
+      jit.Fixups.NewXMMOpRegImm(xmm_multsd, operand, FScale);
+      jit.SetContainsXMMReg(operand, expr);
+      Result := operand;
+   end;
+end;
+
 {
 // ------------------
 // ------------------ Tx86MinMaxFloatFunc ------------------

@@ -24,7 +24,7 @@ unit dwsDynamicArrays;
 interface
 
 uses
-   Classes, SysUtils,
+   Classes, SysUtils, System.Variants,
    dwsSymbols, dwsUtils, dwsDataContext, dwsJSON;
 
 type
@@ -33,7 +33,7 @@ type
       function AsPDouble(var nbElements, stride : NativeInt) : PDouble;
    end;
 
-   TScriptDynamicDataArray = class (TDataContext, IScriptDynArray)//(TInterfacedSelfObject, IScriptDynArray)//
+   TScriptDynamicDataArray = class (TDataContext, IScriptDynArray)
       private
          FElementTyp : TTypeSymbol;
          FElementSize : Integer;
@@ -70,6 +70,7 @@ type
          function SetFromExpr(index : NativeInt; exec : TdwsExecution; valueExpr : TExprBase) : Boolean;
 
       public
+         procedure FreeInstance; override;
 
          function ScriptTypeName : String; override;
 
@@ -112,8 +113,11 @@ type
          property AsString[index : NativeInt] : String write SetAsString;
    end;
 
-   TScriptDynamicValueArray = class (TScriptDynamicDataArray)
+   TScriptDynamicValueArray = class sealed (TScriptDynamicDataArray)
       public
+         class function NewInstance: TObject; override;
+         procedure FreeInstance; override;
+
          procedure Swap(i1, i2 : NativeInt); override;
    end;
 
@@ -356,6 +360,7 @@ type
 
       public
          class function InterfaceToDataOffset : Integer; override; final;
+         procedure FreeInstance; override;
 
          procedure SetArrayLength(n : NativeInt);
 
@@ -413,8 +418,11 @@ type
          procedure AddFromExpr(exec : TdwsExecution; valueExpr : TExprBase);
          function SetFromExpr(index : NativeInt; exec : TdwsExecution; valueExpr : TExprBase) : Boolean;
    end;
-   TScriptDynamicNativeObjectArray = class (TScriptDynamicNativeBaseInterfaceArray, IScriptDynArray)
+   TScriptDynamicNativeObjectArray = class sealed (TScriptDynamicNativeBaseInterfaceArray, IScriptDynArray)
       public
+         class function NewInstance: TObject; override;
+         procedure FreeInstance; override;
+
          procedure AddFromExpr(exec : TdwsExecution; valueExpr : TExprBase);
          function SetFromExpr(index : NativeInt; exec : TdwsExecution; valueExpr : TExprBase) : Boolean;
    end;
@@ -492,7 +500,7 @@ type
          procedure WriteToJSON(writer : TdwsJSONWriter);
    end;
 
-function CreateNewDynamicArray(elemTyp : TTypeSymbol) : IScriptDynArray;
+procedure CreateNewDynamicArray(elemTyp : TTypeSymbol; var result : IScriptDynArray);
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -535,9 +543,9 @@ begin
       dyn.AsString[i+n] := sl[i];
 end;
 
-// CreateNewDynamicArray
+// CreateNewDynamicArray (proc IScriptDynArray)
 //
-function CreateNewDynamicArray(elemTyp : TTypeSymbol) : IScriptDynArray;
+procedure CreateNewDynamicArray(elemTyp : TTypeSymbol; var result : IScriptDynArray);
 var
    size : Integer;
    ct : TClass;
@@ -562,6 +570,7 @@ begin
 //      else if ct = TInterfaceSymbol then
 //         Result := TScriptDynamicNativeInterfaceArray.Create(elemTyp)
       else Result := TScriptDynamicValueArray.Create(elemTyp)
+
    end else Result := TScriptDynamicDataArray.Create(elemTyp);
 end;
 
@@ -713,14 +722,19 @@ end;
 // SetFromExpr
 //
 function TScriptDynamicDataArray.SetFromExpr(index : NativeInt; exec : TdwsExecution; valueExpr : TExprBase) : Boolean;
-var
-   v : Variant;
 begin
    if BoundsCheckPassed(index) then begin
-      valueExpr.EvalAsVariant(exec, v);
-      AsVariant[index] := v;
+      valueExpr.EvalAsVariant(exec, DirectData[Addr+index]);
       Result := True;
    end else Result := False;
+end;
+
+// FreeInstance
+//
+procedure TScriptDynamicDataArray.FreeInstance;
+begin
+   ClearData;
+   FreeMemory(Self);
 end;
 
 // AddStrings
@@ -776,15 +790,16 @@ var
    i, d : NativeInt;
    p : PData;
 begin
-   if count<=0 then Exit;
+   if count <= 0 then Exit;
+
    Dec(FArrayLength, count);
    index:=index*ElementSize;
    count:=count*ElementSize;
    for i:=index to index+count-1 do
       VarClearSafe(DirectData[i]);
-   d:=(FArrayLength-1)*ElementSize+count-index;
+   d := (FArrayLength-1)*ElementSize+count-index;
    p := AsPData;
-   if d>0 then
+   if d > 0 then
       System.Move(p^[index+count], p^[index], d*SizeOf(Variant));
    System.FillChar(p^[FArrayLength*ElementSize], count*SizeOf(Variant), 0);
    SetDataLength(FArrayLength*ElementSize);
@@ -975,6 +990,25 @@ end;
 // ------------------ TScriptDynamicValueArray ------------------
 // ------------------
 
+// NewInstance
+//
+var
+   vDynamicValueArray : TClassInstanceTemplate<TScriptDynamicValueArray>;
+class function TScriptDynamicValueArray.NewInstance: TObject;
+begin
+   if not vDynamicValueArray.Initialized then
+      Result := inherited NewInstance
+   else Result := vDynamicValueArray.CreateInstance;
+end;
+
+// FreeInstance
+//
+procedure TScriptDynamicValueArray.FreeInstance;
+begin
+   ClearData;
+   vDynamicValueArray.ReleaseInstance(Self);
+end;
+
 // Swap
 //
 procedure TScriptDynamicValueArray.Swap(i1, i2 : NativeInt);
@@ -1146,7 +1180,7 @@ procedure TScriptDynamicNativeIntegerArray.Delete(index, count : NativeInt);
 var
    n : Integer;
 begin
-   n := FArrayLength-1-index;
+   n := FArrayLength-index-count;
    if n > 0 then
       System.Move(FData[index+count], FData[index], n*SizeOf(Int64));
    Dec(FArrayLength, count);
@@ -1563,7 +1597,7 @@ procedure TScriptDynamicNativeFloatArray.Delete(index, count : NativeInt);
 var
    n : Integer;
 begin
-   n := FArrayLength-1-index;
+   n := FArrayLength-index-count;
    if n > 0 then
       System.Move(FData[index+count], FData[index], n*SizeOf(Double));
    Dec(FArrayLength, count);
@@ -2606,6 +2640,14 @@ begin
    Result := NativeInt(@instance.FData) - NativeInt(intf);
 end;
 
+// FreeInstance
+//
+procedure TScriptDynamicNativeBaseInterfaceArray.FreeInstance;
+begin
+   FData := nil;
+   FreeMemory(Self);
+end;
+
 // ------------------
 // ------------------ TScriptDynamicNativeInterfaceArray ------------------
 // ------------------
@@ -2633,6 +2675,25 @@ end;
 // ------------------
 // ------------------ TScriptDynamicNativeObjectArray ------------------
 // ------------------
+
+// NewInstance
+//
+var
+   vDynamicNativeObjectArrayTemplate : TClassInstanceTemplate<TScriptDynamicNativeObjectArray>;
+class function TScriptDynamicNativeObjectArray.NewInstance: TObject;
+begin
+   if not vDynamicNativeObjectArrayTemplate.Initialized then
+      Result := inherited NewInstance
+   else Result := vDynamicNativeObjectArrayTemplate.CreateInstance;
+end;
+
+// FreeInstance
+//
+procedure TScriptDynamicNativeObjectArray.FreeInstance;
+begin
+   FData := nil;
+   vDynamicNativeObjectArrayTemplate.ReleaseInstance(Self);
+end;
 
 // SetFromExpr
 //
@@ -2669,7 +2730,7 @@ procedure TScriptDynamicNativeDynArrayArray.SetArrayLength(n : NativeInt);
    begin
       subElemTyp := ElementTyp.UnAliasedType.Typ;
       for i := FArrayLength to n-1 do
-         FData[i] := CreateNewDynamicArray(subElemTyp)
+         CreateNewDynamicArray(subElemTyp, IScriptDynArray(FData[i]))
    end;
 
 begin
@@ -2684,7 +2745,7 @@ end;
 procedure TScriptDynamicNativeDynArrayArray.Insert(index : NativeInt);
 begin
    inherited Insert(index);
-   FData[index] := CreateNewDynamicArray(ElementTyp.UnAliasedType.Typ);
+   CreateNewDynamicArray(ElementTyp.UnAliasedType.Typ, IScriptDynArray(FData[index]));
 end;
 
 // SetFromExpr
@@ -3111,5 +3172,21 @@ begin
       writer.WriteBoolean(FBits[i]);
    writer.EndArray;
 end;
+
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+initialization
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+
+   vDynamicValueArray.Initialize;
+   vDynamicNativeObjectArrayTemplate.Initialize;
+
+finalization
+
+   vDynamicValueArray.Finalize;
+   vDynamicNativeObjectArrayTemplate.Finalize;
 
 end.

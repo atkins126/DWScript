@@ -605,6 +605,7 @@ type
          procedure AdaptParametersSymPos(guess, actual : TFuncSymbol; const useTypes : TSymbolUsages;
                                          var posArray : TScriptPosArray);
          function ReadProcDeclAsync(const hotPos : TScriptPos) : TFuncSymbol;
+         procedure ReadProcDeclProperty(funcSymbol : TFuncSymbol; const hotPos : TScriptPos);
          function ReadProcDecl(funcToken : TTokenType; const hotPos : TScriptPos;
                                declOptions : TdwsReadProcDeclOptions = [];
                                expectedLambdaParams : TParamsSymbolTable = nil) : TFuncSymbol;
@@ -1561,7 +1562,7 @@ procedure TdwsCompiler.CleanupAfterCompile;
 begin
    DirectSet8087CW(F8087CW);
 
-   if InterlockedDecrement(vCompileTidy)=0 then begin
+   if AtomicDecrement(vCompileTidy)=0 then begin
       TidyStringsUnifier;
       vCompileTidy:=8;
    end;
@@ -2616,7 +2617,7 @@ begin
    else
       rootBlock:=FTok.Test(ttBEGIN);
       Result:=ReadStatement(action, initVarBlockExpr);
-      if rootBlock and FTok.TestDelete(ttDOT) then
+      if rootBlock and (CurrentProg.Level = 0) and FTok.TestDelete(ttDOT) then
          action:=saEnd;
    end;
 end;
@@ -3337,11 +3338,8 @@ begin
                      if Assigned(FExternalRoutinesManager) then
                         Result:=FExternalRoutinesManager.ConvertToMagicSymbol(Result);
                      Result.IsExternal:=True;
-                     if FTok.TestDelete(ttPROPERTY) then begin
-                        Result.IsProperty:=True;
-                        if Result.Params.Count>0 then
-                           FMsgs.AddCompilerError(FTok.HotPos, CPE_ExternalPropertyNoArguments);
-                     end;
+                     if FTok.TestDelete(ttPROPERTY) then
+                        ReadProcDeclProperty(Result, FTok.HotPos);
                      ReadSemiColon;
                   end;
 
@@ -3508,6 +3506,17 @@ begin
       FMsgs.AddCompilerStop(FTok.HotPos, CPE_ProcOrFuncExpected);
       Result := nil;
    end;
+end;
+
+// ReadProcDeclProperty
+//
+procedure TdwsCompiler.ReadProcDeclProperty(funcSymbol : TFuncSymbol; const hotPos : TScriptPos);
+begin
+   funcSymbol.IsProperty := True;
+   if funcSymbol.Typ = nil then
+      FMsgs.AddCompilerError(hotPos, CPE_ExternalPropertyNoType);
+   if funcSymbol.Params.Count > 1 then
+      FMsgs.AddCompilerError(hotPos, CPE_ExternalPropertyNoArguments);
 end;
 
 // ReadIntfMethodDecl
@@ -3753,6 +3762,8 @@ begin
          if not ownerSym.IsExternal then
             FMsgs.AddCompilerErrorFmt(FTok.HotPos, CPE_StructureIsNotExternal, [funcResult.QualifiedName]);
          ReadExternalName(funcResult);
+         if FTok.TestDelete(ttPROPERTY) then
+            ReadProcDeclProperty(funcResult, FTok.HotPos);
          ReadSemiColon;
       end;
 
@@ -4935,9 +4946,14 @@ begin
 
          end;
 
-      end else if stTypeSymbol in symTaxonomy then begin // symClassType.InheritsFrom(TTypeSymbol) then begin
+      end else if stTypeSymbol in symTaxonomy then begin
 
          // type symbols
+
+         if stAliasSymbol in symTaxonomy then begin
+            sym := TAliasSymbol(sym).UnAliasedType;
+            symClassType := sym.ClassType;
+         end;
 
          if baseType is TStructuredTypeSymbol then begin
 
@@ -5052,7 +5068,7 @@ begin
          if UnicodeSameText(name, 'ByName') then begin
             Exit(ReadByName(elemPos));
          end else if not FTok.TestDelete(ttBRIGHT) then
-            FMsgs.AddCompilerStop(FTok.HotPos, CPE_BrackRightExpected);
+            FMsgs.AddCompilerStopFmt(elemPos, CPE_UnknownMethodForType, [ name, enumSym.Name ]);
          elem:=nil;
       end else begin
          elem:=enumSym.Elements.FindLocal(name);
@@ -7991,7 +8007,7 @@ begin
          amkAdd, amkPush :
             argList.DefaultExpected:=TParamSymbol.Create('', arraySym.Typ);
 
-         amkIndexOf, amkRemove : begin
+         amkIndexOf, amkRemove, amkContains : begin
             argSymTable:=TUnSortedSymbolTable.Create;
             argSymTable.AddSymbol(TParamSymbol.Create('', arraySym.Typ));
             argList.Table:=argSymTable;
@@ -8101,6 +8117,18 @@ begin
                   argList.Clear;
                end else begin
                   Result := indexOfClass.Create(FCompilerContext, namePos, baseExpr, nil, nil);
+               end;
+            end;
+
+            amkContains: begin
+               CheckDynamicOrStatic;
+               if CheckArguments(1, 1) then begin
+                  if (argList[0].Typ=nil) or not arraySym.Typ.IsCompatible(argList[0].Typ) then begin
+                     argList[0] := CompilerUtils.WrapWithImplicitConversion(FCompilerContext, argList[0], arraySym.Typ,
+                                                                           argPosArray[0], CPE_IncompatibleParameterTypes);
+                  end;
+                  Result := CompilerUtils.ArrayContains(FCompilerContext, namePos, baseExpr, argList[0]);
+                  argList.Clear;
                end;
             end;
 
@@ -9567,7 +9595,7 @@ begin
          end else if sym is TMethodSymbol then begin
 
             if classProperty and not TMethodSymbol(sym).IsClassMethod then
-               FMsgs.AddCompilerError(accessPos, CPE_ClassMethodExpected);
+               FMsgs.AddCompilerError(accessPos, CPE_ClassMethodOrConstructorExpected);
             if not CheckPropertyFuncParams(propSym.ArrayIndices, TMethodSymbol(sym), indexTyp) then
                FMsgs.AddCompilerErrorFmt(FTok.HotPos, CPE_IncompatibleParameters, [sym.Name]);
 
@@ -9598,7 +9626,7 @@ begin
          else if sym is TMethodSymbol then begin
 
             if classProperty and not TMethodSymbol(sym).IsClassMethod then
-               FMsgs.AddCompilerError(accessPos, CPE_ClassMethodExpected);
+               FMsgs.AddCompilerError(accessPos, CPE_ClassMethodOrConstructorExpected);
             if    (not (TMethodSymbol(sym).Kind in [fkProcedure, fkMethod]))
                or (TMethodSymbol(sym).Typ<>nil) then
                FMsgs.AddCompilerError(FTok.HotPos, CPE_ProcedureMethodExpected)
@@ -11171,7 +11199,6 @@ var
    classOpSymbol : TClassOperatorSymbol;
    classOpExpr : TFuncExprBase;
    argPosArray : TScriptPosArray;
-   indexOfExprClass : TArrayIndexOfExprClass;
 begin
    hotPos:=FTok.HotPos;
 
@@ -11206,15 +11233,7 @@ begin
                end;
             end;
 
-            indexOfExprClass := TArrayIndexOfExpr.ArrayIndexOfExprClass(setExpr.Typ as TArraySymbol);
-            Result := indexOfExprClass.Create(FCompilerContext, hotPos, setExpr, left, nil);
-            if indexOfExprClass.InheritsFrom(TStaticArrayIndexOfExpr) then begin
-               TStaticArrayIndexOfExpr(Result).ForceZeroBased := True;
-               if setExpr.Typ.ClassType <> TStaticArraySymbol then
-                  FMsgs.AddCompilerError(hotPos, CPE_IncompatibleOperands);
-            end;
-            Result := TRelGreaterEqualIntExpr.Create(FCompilerContext, hotPos, ttIN, Result,
-                                                   FUnifiedConstants.CreateInteger(0));
+            Result := CompilerUtils.ArrayContains(FCompilerContext, hotPos, setExpr, left);
 
          end else if setExpr.Typ is TSetOfSymbol then begin
 
@@ -14583,7 +14602,7 @@ begin
                if typeSym.ClassType<>THelperSymbol then begin
                   if    (expr is TTypeReferenceExpr)
                      or (expr.Typ is TStructuredTypeMetaSymbol) then begin
-                     FMsgs.AddCompilerError(namePos, CPE_ClassMethodExpected);
+                     FMsgs.AddCompilerError(namePos, CPE_ClassMethodOrConstructorExpected);
                      // keep compiling
                      expr:=TConvExpr.Create(FCompilerContext, namePos, expr);
                      expr.Typ:=meth.Params[0].Typ;

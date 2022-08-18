@@ -84,9 +84,13 @@ type
 
          function  HashCode(size : NativeInt) : Cardinal;
 
+         constructor CreateEmpty;
+
       public
          constructor Create(const anArray : IScriptDynArray; anIndex : NativeInt);
 
+         class function NewInstance : TObject; override;
+         procedure FreeInstance; override;
    end;
 
 // ------------------------------------------------------------------
@@ -114,6 +118,32 @@ begin
    FIndex := anIndex;
    FElementSize := anArray.ElementSize;
    FBase := FIndex*FElementSize;
+end;
+
+// CreateEmpty
+//
+constructor TArrayElementDataContext.CreateEmpty;
+begin
+   inherited Create;
+end;
+
+// NewInstance
+//
+var
+   vArrayElementTemplate : TClassInstanceTemplate<TArrayElementDataContext>;
+class function TArrayElementDataContext.NewInstance : TObject;
+begin
+   if not vArrayElementTemplate.Initialized then
+      Result := inherited NewInstance
+   else Result := vArrayElementTemplate.CreateInstance;
+end;
+
+// FreeInstance
+//
+procedure TArrayElementDataContext.FreeInstance;
+begin
+   FArray := nil;
+   vArrayElementTemplate.ReleaseInstance(Self);
 end;
 
 // GetSelf
@@ -407,5 +437,19 @@ function TArrayElementDataContext.HashCode(size : NativeInt) : Cardinal;
 begin
    Result := FArray.HashCode(ComputeAddr(0), size);
 end;
+
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+initialization
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+
+   vArrayElementTemplate.Initialize;
+
+finalization
+
+   vArrayElementTemplate.Finalize;
 
 end.

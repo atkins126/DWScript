@@ -35,6 +35,7 @@ type
    TSingleDynArray = array of Single;
    TDoubleDynArray = array of Double;
    TInterfaceDynArray = array of IUnknown;
+   TVariantDynArray = array of Variant;
 
    TInt64Array = array [0..High(MaxInt) shr 4] of Int64;
    PInt64Array = ^TInt64Array;
@@ -912,14 +913,29 @@ type
       {$endif}
    end;
 
-   TClassCloneConstructor<T: TRefCountedObject> = record
+   TClassCloneConstructor<T: class, constructor> = record
       private
          FTemplate : T;
          FSize : Integer;
+
       public
          procedure Initialize(aTemplate : T);
          procedure Finalize;
          function Create : T; inline;
+   end;
+
+   TClassInstanceTemplate<T: class> = record
+      private
+         FTemplate : Pointer;
+         FPool : Pointer;
+
+      public
+         procedure Initialize;
+         procedure Finalize;
+         function Initialized : Boolean; inline;
+
+         function CreateInstance : T; inline;
+         procedure ReleaseInstance(instance : T); inline;
    end;
 
    ETightListOutOfBound = class(Exception)
@@ -1288,16 +1304,9 @@ var
    mix : NativeUInt;
 begin
    // based on xxHash finalizers
-   {$ifdef CPU64}
-   mix := NativeUInt(x);
-   mix := (mix xor (mix shr 33)) * 14029467366897019727;
-   mix := (mix xor (mix shr 29)) * 1609587929392839161;
-   mix := mix xor (mix shr 32);
-   {$else}
    mix := (NativeUInt(x) shr 2) * Cardinal(2246822519);
    mix := (mix xor (mix shr 15)) * Cardinal(3266489917);
    Result := (mix xor (mix shr 16));
-   {$endif}
    if Result = 0 then Result := 1;
 end;
 
@@ -6548,7 +6557,7 @@ begin
    {$else}
    p:=PInteger(NativeInt(Self)+InstanceSize-hfFieldSize+hfMonitorOffset);
    {$endif}
-   Result:=InterlockedIncrement(p^);
+   Result := AtomicIncrement(p^);
 end;
 
 // DecRefCount
@@ -6565,7 +6574,7 @@ begin
    if p^=0 then begin
       Destroy;
       Result:=0;
-   end else Result:=InterlockedDecrement(p^);
+   end else Result := AtomicDecrement(p^);
 end;
 
 // GetRefCount
@@ -6960,8 +6969,8 @@ end;
 //
 procedure TClassCloneConstructor<T>.Initialize(aTemplate : T);
 begin
-   FTemplate:=aTemplate;
-   FSize:= FTemplate.InstanceSize;
+   FTemplate := aTemplate;
+   FSize := FTemplate.InstanceSize;
 end;
 
 // Finalize
@@ -6969,7 +6978,7 @@ end;
 procedure TClassCloneConstructor<T>.Finalize;
 begin
    FTemplate.Free;
-   TObject(FTemplate):=nil; // D2010 bug workaround
+   TObject(FTemplate) := nil; // D2010 bug workaround
 end;
 
 // Create
@@ -7860,6 +7869,61 @@ begin
    b := buf;
 end;
 
+// ------------------
+// ------------------ TClassInstanceTemplate<T> ------------------
+// ------------------
+
+// Initialize
+//
+procedure TClassInstanceTemplate<T>.Initialize;
+begin
+   FTemplate := T.NewInstance;
+   FPool := nil;
+end;
+
+// Finalize
+//
+procedure TClassInstanceTemplate<T>.Finalize;
+begin
+   if FTemplate <> nil then begin
+      TObject(FTemplate).FreeInstance;
+      FTemplate := nil;
+   end;
+   if FPool <> nil then begin
+      TObject(FPool).FreeInstance;
+      FPool := nil;
+   end;
+end;
+
+// Initialized
+//
+function TClassInstanceTemplate<T>.Initialized : Boolean;
+begin
+   Result := FTemplate <> nil;
+end;
+
+// CreateInstance
+//
+function TClassInstanceTemplate<T>.CreateInstance : T;
+begin
+   Result := FPool;
+   if Result <> nil then
+      Result := InterlockedCompareExchangePointer(FPool, nil, Pointer(Result));
+   if Result = nil then
+      Result := GetMemory(T.InstanceSize);
+   System.Move(Pointer(FTemplate)^, Pointer(Result)^, T.InstanceSize);
+end;
+
+// ReleaseInstance
+//
+procedure TClassInstanceTemplate<T>.ReleaseInstance(instance : T);
+begin
+   if FPool <> nil then
+      FreeMemory(Pointer(instance))
+   else if InterlockedCompareExchangePointer(FPool, Pointer(instance), nil) <> nil then
+      FreeMemory(Pointer(instance));
+end;
+
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -7889,8 +7953,9 @@ initialization
 finalization
 
    FinalizeStringsUnifier;
-   TSimpleIntegerStack.vTemplate.Free;
-   TObject(vWOBSPool).Free;
+
+   FreeAndNil(TSimpleIntegerStack.vTemplate);
+   FreeAndNil(TObject(vWOBSPool));
 
 end.
 

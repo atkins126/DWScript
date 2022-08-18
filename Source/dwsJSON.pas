@@ -2996,9 +2996,13 @@ begin
    else if IsNan(n) then
       FStream.WriteString('null')
    else begin
-      nExt := n;
-      nc := FloatToText(buffer, nExt, fvExtended, ffGeneral, 15, 0, vJSONFormatSettings);
-      FStream.Write(buffer, nc*SizeOf(WideChar));
+      if (Abs(n) <= High(Int64)) and (Round(n) = n) then
+         FStream.WriteString(Round(n))
+      else begin
+         nExt := n;
+         nc := FloatToText(buffer, nExt, fvExtended, ffGeneral, 15, 0, vJSONFormatSettings);
+         FStream.Write(buffer, nc*SizeOf(WideChar));
+      end;
    end;
    AfterWriteImmediate;
 end;
