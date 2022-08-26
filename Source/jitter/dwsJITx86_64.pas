@@ -220,6 +220,7 @@ type
          procedure RestoreRegisters;
 
          function  AllocXMMReg(expr : TExprBase) : TxmmRegister;
+         function  AllocOrAcquireXMMReg(sourceReg : TxmmRegister; forExpr : TExprBase) : TxmmRegister;
          procedure ReleaseXMMReg(reg : TxmmRegister);
          function  CurrentXMMReg(expr : TExprBase) : TxmmRegister;
          function  IsSymbolXMMReg(reg : TxmmRegister) : Boolean;
@@ -227,6 +228,7 @@ type
          procedure FlushXMMSymbol(dataSymbol : TDataSymbol);
 
          function  AllocGPReg(expr : TExprBase) : TgpRegister64;
+         function  AllocOrAcquireGPReg(sourceReg : TgpRegister64; forExpr : TExprBase) : TgpRegister64;
          procedure ReleaseGPReg(reg : TgpRegister64);
          function  CurrentGPReg(expr : TExprBase; var reg : TgpRegister64) : Boolean;
          function  IsSymbolGPReg(reg : TgpRegister64) : Boolean;
@@ -298,6 +300,11 @@ type
    TIntegerExpr86 = class (TJITTedIntegerExpr)
       public
          function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
+   end;
+
+   TBooleanExpr86 = class (TJITTedBooleanExpr)
+      public
+         function  EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
    end;
 
    TdwsJITter_x86 = class (TdwsJITter)
@@ -467,6 +474,10 @@ type
       procedure CompileStatement(expr : TExprBase); override;
    end;
 
+   Tx86IfThenElseValue = class (Tx86InterpretedExpr)
+      function  DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
+   end;
+
    Tx86Loop = class (TdwsJITter_x86)
       procedure CompileStatement(expr : TExprBase); override;
    end;
@@ -477,7 +488,7 @@ type
       procedure CompileStatement(expr : TExprBase); override;
    end;
 
-   Tx86ForUpward = class (TdwsJITter_x86)
+   Tx86ForLoop = class (TdwsJITter_x86)
       procedure CompileStatement(expr : TExprBase); override;
    end;
 
@@ -521,6 +532,10 @@ type
    Tx86MultIntPow2 = class (TdwsJITter_x86)
       function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
    end;
+   Tx86SqrInt = class (TdwsJITter_x86)
+      function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
+      function CompileIntegerOperand(sqrExpr, operandExpr : TTypedExpr) : TgpRegister64;
+   end;
    Tx86DivInt = class (Tx86InterpretedExpr)
       protected
          function PowerOfTwoDivisor(expr : TTypedExpr; operandReg : TgpRegister64; exponent : Integer) : TgpRegister64; virtual;
@@ -533,9 +548,9 @@ type
          function PowerOfTwoDivisor(expr : TTypedExpr; operandReg : TgpRegister64; exponent : Integer) : TgpRegister64; override;
          procedure Assign_IDIV_To_Result(resultReg : TgpRegister64); override;
    end;
-{   Tx86ModFloat = class (TdwsJITter_x86)
+   Tx86ModFloat = class (TdwsJITter_x86)
       function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
-   end;  }
+   end;
    Tx86IntegerBinOpExpr = class (TdwsJITter_x86)
       FOp : TgpOp;
       FCommutative : Boolean;
@@ -609,6 +624,17 @@ type
       function  DoCompileBooleanValue(expr : TTypedExpr) : TgpRegister64; override;
       procedure DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup); override;
    end;
+   Tx86BoolImpliesExpr = class (TdwsJITter_x86)
+      procedure DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup); override;
+   end;
+
+   Tx86CoalesceIntExpr = class (TdwsJITter_x86)
+      function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
+   end;
+
+   Tx86BitwiseInOpExpr = class (TdwsJITter_x86)
+      procedure DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup); override;
+   end;
 
 {
    Tx86SetOfExpr = class (TdwsJITter_x86)
@@ -644,6 +670,7 @@ type
    end;
 
    Tx86MagicFunc = class (Tx86InterpretedExpr)
+      procedure CompileStatement(expr : TExprBase); override;
       function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
       function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
       procedure DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup); override;
@@ -678,13 +705,15 @@ type
    Tx86SqrFloatFunc = class (Tx86SqrFloat)
       function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
    end;
+   Tx86SqrIntFunc = class (Tx86SqrInt)
+      function DoCompileInteger(expr : TTypedExpr) : TgpRegister64; override;
+   end;
 
    Tx86ScaleFloatFunc = class (Tx86MagicFunc)
       FScale : Double;
       constructor Create(jit : TdwsJITx86_64; const aScale : Double);
       function DoCompileFloat(expr : TTypedExpr) : TxmmRegister; override;
    end;
-
 
    Tx86MinMaxFloatFunc = class (Tx86MagicFunc)
       public
@@ -820,9 +849,10 @@ begin
 
    FAllocator:=TdwsJITAllocatorWin.Create;
 
-   JITTedProgramExprClass:=TProgramExpr86;
-   JITTedFloatExprClass:=TFloatExpr86;
-   JITTedIntegerExprClass:=TIntegerExpr86;
+   JITTedProgramExprClass := TProgramExpr86;
+   JITTedFloatExprClass := TFloatExpr86;
+   JITTedIntegerExprClass := TIntegerExpr86;
+   JITTedBooleanExprClass := TBooleanExpr86;
 
    FInterpretedJITter:=Tx86InterpretedExpr.Create(Self);
 
@@ -927,13 +957,6 @@ begin
    RegisterJITter(TMultAssignFloatExpr,         Tx86OpAssignFloat.Create(Self, xmm_multsd));
    RegisterJITter(TDivideAssignExpr,            Tx86OpAssignFloat.Create(Self, xmm_divsd));
 
-   RegisterJITter(TStringLengthExpr,            FInterpretedJITter.IncRefCount);
-   RegisterJITter(TAppendStringVarExpr,         FInterpretedJITter.IncRefCount);
-   RegisterJITter(TAppendConstStringVarExpr,    FInterpretedJITter.IncRefCount);
-   RegisterJITter(TVarStringArraySetExpr,       FInterpretedJITter.IncRefCount);
-   RegisterJITter(TStringArrayOpExpr,           FInterpretedJITter.IncRefCount);
-   RegisterJITter(TPlusAssignStrExpr,           FInterpretedJITter.IncRefCount);
-
    RegisterJITter(TPlusAssignIntExpr,           FInterpretedJITter.IncRefCount);
    RegisterJITter(TMinusAssignIntExpr,          FInterpretedJITter.IncRefCount);
    RegisterJITter(TMultAssignIntExpr,           FInterpretedJITter.IncRefCount);
@@ -942,9 +965,16 @@ begin
    RegisterJITter(TMinusAssignExpr,             FInterpretedJITter.IncRefCount);
    RegisterJITter(TMultAssignExpr,              FInterpretedJITter.IncRefCount);
 
+   RegisterJITter(TStringLengthExpr,            FInterpretedJITter.IncRefCount);
+   RegisterJITter(TAppendStringVarExpr,         FInterpretedJITter.IncRefCount);
+   RegisterJITter(TAppendConstStringVarExpr,    FInterpretedJITter.IncRefCount);
+   RegisterJITter(TVarStringArraySetExpr,       FInterpretedJITter.IncRefCount);
+   RegisterJITter(TStringArrayOpExpr,           FInterpretedJITter.IncRefCount);
+   RegisterJITter(TPlusAssignStrExpr,           FInterpretedJITter.IncRefCount);
+
    RegisterJITter(TIfThenExpr,                  Tx86IfThen.Create(Self));
    RegisterJITter(TIfThenElseExpr,              Tx86IfThenElse.Create(Self));
-   RegisterJITter(TIfThenElseValueExpr,         FInterpretedJITter.IncRefCount);
+   RegisterJITter(TIfThenElseValueExpr,         Tx86IfThenElseValue.Create(Self));
    RegisterJITter(TCaseExpr,                    FInterpretedJITter.IncRefCount);
    RegisterJITter(TCaseStringExpr,              FInterpretedJITter.IncRefCount);
    RegisterJITter(TCaseIntegerExpr,             FInterpretedJITter.IncRefCount);
@@ -953,10 +983,10 @@ begin
    RegisterJITter(TRepeatExpr,                  Tx86Repeat.Create(Self));
    RegisterJITter(TWhileExpr,                   Tx86While.Create(Self));
 
-   RegisterJITter(TForUpwardExpr,               Tx86ForUpward.Create(Self));
-   RegisterJITter(TForUpwardStepExpr,           Tx86ForUpward.Create(Self));
-   RegisterJITter(TForDownwardExpr,             FInterpretedJITter.IncRefCount);
-   RegisterJITter(TForDownwardStepExpr,         FInterpretedJITter.IncRefCount);
+   RegisterJITter(TForUpwardExpr,               Tx86ForLoop.Create(Self));
+   RegisterJITter(TForUpwardStepExpr,           Tx86ForLoop.Create(Self));
+   RegisterJITter(TForDownwardExpr,             Tx86ForLoop.Create(Self));
+   RegisterJITter(TForDownwardStepExpr,         Tx86ForLoop.Create(Self));
    RegisterJITter(TForCharCodeInStrExpr,        FInterpretedJITter.IncRefCount);
    RegisterJITter(TForCharInStrExpr,            FInterpretedJITter.IncRefCount);
 
@@ -974,7 +1004,7 @@ begin
    RegisterJITter(TMultFloatExpr,               Tx86FloatBinOp.Create(Self, xmm_multsd));
    RegisterJITter(TSqrFloatExpr,                Tx86SqrFloat.Create(Self));
    RegisterJITter(TDivideExpr,                  Tx86FloatBinOp.Create(Self, xmm_divsd));
-   RegisterJITter(TModFloatExpr,                FInterpretedJITter.IncRefCount);// Tx86ModFloat.Create(Self));
+   RegisterJITter(TModFloatExpr,                Tx86ModFloat.Create(Self));
    RegisterJITter(TNegFloatExpr,                Tx86NegFloat.Create(Self));
 
    RegisterJITter(TNegIntExpr,                  Tx86NegInt.Create(Self));
@@ -982,13 +1012,11 @@ begin
    RegisterJITter(TAddIntExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_add));
    RegisterJITter(TSubIntExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_sub, False));
    RegisterJITter(TMultIntExpr,                 Tx86MultInt.Create(Self));
-   RegisterJITter(TSqrIntExpr,                  FInterpretedJITter.IncRefCount);
+   RegisterJITter(TSqrIntExpr,                  Tx86SqrInt.Create(Self));
    RegisterJITter(TDivExpr,                     Tx86DivInt.Create(Self));
    RegisterJITter(TDivConstExpr,                Tx86DivInt.Create(Self));
    RegisterJITter(TModExpr,                     Tx86ModInt.Create(Self));
-//   RegisterJITter(TModExpr,                     FInterpretedJITter.IncRefCount);
    RegisterJITter(TModConstExpr,                Tx86ModInt.Create(Self));
-//   RegisterJITter(TModConstExpr,                FInterpretedJITter.IncRefCount);
    RegisterJITter(TMultIntPow2Expr,             Tx86MultIntPow2.Create(Self));
    RegisterJITter(TIntAndExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_and));
    RegisterJITter(TIntXorExpr,                  Tx86IntegerBinOpExpr.Create(Self, gpOp_xor));
@@ -1003,7 +1031,7 @@ begin
    RegisterJITter(TStringInOpExpr,              FInterpretedJITter.IncRefCount);
    RegisterJITter(TStringInOpStaticSetExpr,     FInterpretedJITter.IncRefCount);
    RegisterJITter(TIntegerInOpExpr,             FInterpretedJITter.IncRefCount);
-   RegisterJITter(TBitwiseInOpExpr,             FInterpretedJITter.IncRefCount);
+   RegisterJITter(TBitwiseInOpExpr,             Tx86BitwiseInOpExpr.Create(Self));
 
    RegisterJITter(TIncIntVarExpr,               Tx86IncIntVar.Create(Self));
    RegisterJITter(TDecIntVarExpr,               Tx86DecIntVar.Create(Self));
@@ -1055,13 +1083,13 @@ begin
    RegisterJITter(TBoolOrExpr,                  Tx86BoolOrExpr.Create(Self));
    RegisterJITter(TBoolAndExpr,                 Tx86BoolAndExpr.Create(Self));
    RegisterJITter(TBoolXorExpr,                 Tx86BoolXorExpr.Create(Self));
-   RegisterJITter(TBoolImpliesExpr,             FInterpretedJITter.IncRefCount);
+   RegisterJITter(TBoolImpliesExpr,             Tx86BoolImpliesExpr.Create(Self));
 
    RegisterJITter(TCoalesceExpr,                FInterpretedJITter.IncRefCount);
-   RegisterJITter(TCoalesceIntExpr,             FInterpretedJITter.IncRefCount);
+   RegisterJITter(TCoalesceIntExpr,             Tx86CoalesceIntExpr.Create(Self));
    RegisterJITter(TCoalesceFloatExpr,           FInterpretedJITter.IncRefCount);
    RegisterJITter(TCoalesceStrExpr,             FInterpretedJITter.IncRefCount);
-   RegisterJITter(TCoalesceBooleanExpr,         FInterpretedJITter.IncRefCount);
+   RegisterJITter(TCoalesceBooleanExpr,         Tx86BoolOrExpr.Create(Self));
    RegisterJITter(TCoalesceClassExpr,           FInterpretedJITter.IncRefCount);
    RegisterJITter(TCoalesceDynArrayExpr,        FInterpretedJITter.IncRefCount);
 
@@ -1085,7 +1113,7 @@ begin
    RegisterJITter(TConvIntToFloatExpr,          Tx86ConvIntToFloat.Create(Self));
    RegisterJITter(TConvVarToFloatExpr,          FInterpretedJITter.IncRefCount);
    RegisterJITter(TConvVarToIntegerExpr,        FInterpretedJITter.IncRefCount);
-   RegisterJITter(TConvVarToBoolExpr,        FInterpretedJITter.IncRefCount);
+   RegisterJITter(TConvVarToBoolExpr,           FInterpretedJITter.IncRefCount);
    RegisterJITter(TConvOrdToIntegerExpr,        Tx86OrdInt.Create(Self));
 
    RegisterJITter(TConstructorStaticExpr,       FInterpretedJITter.IncRefCount);
@@ -1107,7 +1135,7 @@ begin
 
    RegisterJITter(TFuncExpr,                    FInterpretedJITter.IncRefCount);
    RegisterJITter(TFuncSimpleExpr,              FInterpretedJITter.IncRefCount);
-   RegisterJITter(TMagicProcedureExpr,          FInterpretedJITter.IncRefCount);
+   RegisterJITter(TMagicProcedureExpr,          Tx86MagicFunc.Create(Self));
    RegisterJITter(TMagicFloatFuncExpr,          Tx86MagicFunc.Create(Self));
    RegisterJITter(TMagicIntFuncExpr,            Tx86MagicFunc.Create(Self));
    RegisterJITter(TMagicBoolFuncExpr,           Tx86MagicFunc.Create(Self));
@@ -1120,6 +1148,7 @@ begin
 
    RegisterJITter(TSqrtFunc,                    Tx86SqrtFunc.Create(Self));
    RegisterJITter(TSqrFloatFunc,                Tx86SqrFloatFunc.Create(Self));
+   RegisterJITter(TSqrIntFunc,                  Tx86SqrIntFunc.Create(Self));
    RegisterJITter(TMaxFunc,                     Tx86MinMaxFloatFunc.Create(Self, xmm_maxsd));
    RegisterJITter(TMinFunc,                     Tx86MinMaxFloatFunc.Create(Self, xmm_minsd));
 
@@ -1359,6 +1388,20 @@ begin
    end else OutputFailedOn := expr;
 end;
 
+// AllocOrAcquireXMMReg
+//
+function TdwsJITx86_64.AllocOrAcquireXMMReg(sourceReg : TxmmRegister; forExpr : TExprBase) : TxmmRegister;
+begin
+   if IsSymbolXMMReg(sourceReg) then begin
+      Result := AllocXMMReg(forExpr);
+      x86._movsd_reg_reg(Result, sourceReg);
+      ReleaseXMMReg(sourceReg);
+   end else begin
+      Result := sourceReg;
+      SetContainsXMMReg(Result, forExpr);
+   end;
+end;
+
 // ReleaseXMMReg
 //
 procedure TdwsJITx86_64.ReleaseXMMReg(reg : TxmmRegister);
@@ -1458,6 +1501,20 @@ begin
       FPreamble.NotifyGPAlteration(Result);
 
    end else OutputFailedOn := expr;
+end;
+
+// AllocOrAcquireGPReg
+//
+function TdwsJITx86_64.AllocOrAcquireGPReg(sourceReg : TgpRegister64; forExpr : TExprBase) : TgpRegister64;
+begin
+   if IsSymbolGPReg(sourceReg) then begin
+      Result := AllocGPReg(forExpr);
+      x86._mov_reg_reg(Result, sourceReg);
+      ReleaseGPReg(sourceReg);
+   end else begin
+      Result := sourceReg;
+      SetContainsGPReg(Result, forExpr);
+   end;
 end;
 
 // ReleaseGPReg
@@ -2817,6 +2874,17 @@ asm
 end;
 
 // ------------------
+// ------------------ TBooleanExpr86 ------------------
+// ------------------
+
+// EvalAsBoolean
+//
+function TBooleanExpr86.EvalAsBoolean(exec : TdwsExecution) : Boolean;
+asm
+   call [rcx + OFFSET FCodePtr]
+end;
+
+// ------------------
 // ------------------ Tx86AssignConstToFloatVar ------------------
 // ------------------
 
@@ -3069,6 +3137,56 @@ begin
 end;
 
 // ------------------
+// ------------------ Tx86IfThenElseValue ------------------
+// ------------------
+
+// DoCompileInteger
+//
+function Tx86IfThenElseValue.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
+var
+   e : TIfThenElseValueExpr;
+   targetTrue, targetFalse, targetDone : TFixupTarget;
+   regTrue, regFalse : TgpRegister64;
+begin
+   if not expr.Typ.UnAliasedTypeIs(TBaseIntegerSymbol) then
+      Exit(inherited DoCompileInteger(expr));
+
+   e := TIfThenElseValueExpr(expr);
+
+   targetTrue := jit.Fixups.NewHangingTarget(False);
+   targetFalse := jit.Fixups.NewHangingTarget(False);
+   targetDone := jit.Fixups.NewHangingTarget(False);
+
+   jit.CompileBoolean(e.CondExpr, targetTrue, targetFalse);
+
+   Result := jit.AllocGPReg(e);
+
+   jit.Fixups.AddFixup(targetTrue);
+
+   if e.TrueExpr is TConstIntExpr then
+      x86._mov_reg_imm(Result, TConstIntExpr(e.TrueExpr).Value)
+   else begin
+      regTrue := jit.CompileIntegerToRegister(e.TrueExpr);
+      x86._mov_reg_reg(Result, regTrue);
+      jit.ReleaseGPReg(regTrue);
+   end;
+
+   jit.Fixups.NewJump(flagsNone, targetDone);
+
+   jit.Fixups.AddFixup(targetFalse);
+
+   if e.FalseExpr is TConstIntExpr then
+      x86._mov_reg_imm(Result, TConstIntExpr(e.FalseExpr).Value)
+   else begin
+      regFalse := jit.CompileIntegerToRegister(e.FalseExpr);
+      x86._mov_reg_reg(Result, regFalse);
+      jit.ReleaseGPReg(regFalse);
+   end;
+
+   jit.Fixups.AddFixup(targetDone);
+end;
+
+// ------------------
 // ------------------ Tx86Loop ------------------
 // ------------------
 
@@ -3172,14 +3290,14 @@ begin
 end;
 
 // ------------------
-// ------------------ Tx86ForUpward ------------------
+// ------------------ Tx86ForLoop ------------------
 // ------------------
 
 // CompileStatement
 //
 var
    cPtr_TForStepExpr_RaiseForLoopStepShouldBeStrictlyPositive : Pointer = @TForStepExpr.RaiseForLoopStepShouldBeStrictlyPositive;
-procedure Tx86ForUpward.CompileStatement(expr : TExprBase);
+procedure Tx86ForLoop.CompileStatement(expr : TExprBase);
 var
    e : TForExpr;
    loopStart : TFixupTarget;
@@ -3191,6 +3309,8 @@ var
    toValueOffset : Integer;
    stepValueIsConstant : Boolean;
    stepValueOffset : Integer;
+   upwardLoop : Boolean;
+   stepOp : TgpOp;
    tmpReg : TgpRegister64;
 begin
    e := TForExpr(expr);
@@ -3213,12 +3333,12 @@ begin
 
    end;
 
-   if e is TForUpwardStepExpr then begin
+   if e is TForStepExpr then begin
 
-      if TForUpwardStepExpr(e).StepExpr is TConstIntExpr then begin
+      if TForStepExpr(e).StepExpr is TConstIntExpr then begin
 
          stepValueIsConstant := True;
-         stepValue := TConstIntExpr(TForUpwardStepExpr(e).StepExpr).Value;
+         stepValue := TConstIntExpr(TForStepExpr(e).StepExpr).Value;
          stepValueOffset := 0;
 
       end else begin
@@ -3227,7 +3347,7 @@ begin
          stepValue := 0;
          stepValueOffset := jit.FPreamble.AllocateStackSpace(SizeOf(Int64));
 
-         tmpReg := jit.CompileIntegerToRegister(TForUpwardStepExpr(e).StepExpr);
+         tmpReg := jit.CompileIntegerToRegister(TForStepExpr(e).StepExpr);
          x86._mov_qword_ptr_reg_reg(gprRBP, stepValueOffset, tmpReg);
 
          x86._cmp_reg_imm(tmpReg, 0);
@@ -3255,6 +3375,8 @@ begin
 
    end;
 
+   upwardLoop := (expr is TForUpwardExpr) or (expr is TForUpwardStepExpr);
+
    jit.FlushRegisters(regFlushAll);
 
    loopStart := jit.Fixups.NewTarget(True);
@@ -3270,7 +3392,9 @@ begin
       x86._cmp_reg_qword_ptr_reg(tmpReg, gprRBP, toValueOffset);
    end;
    jit.ReleaseGPReg(tmpReg);
-   jit.Fixups.NewJump(flagsG, loopAfter);
+   if upwardLoop then
+      jit.Fixups.NewJump(flagsG, loopAfter)
+   else jit.Fixups.NewJump(flagsL, loopAfter);
 
    jit._DoStep(e.DoExpr);
    jit.CompileStatement(e.DoExpr);
@@ -3279,10 +3403,13 @@ begin
 
    if jit.CurrentGPReg(e.VarExpr, tmpReg) then begin
 
+      if upwardLoop then
+         stepOp := gpOp_add
+      else stepOp := gpOp_sub;
       if stepValueIsConstant then begin
-         jit._op_reg_imm(gpOp_add, tmpReg, stepValue);
+         jit._op_reg_imm(stepOp, tmpReg, stepValue);
       end else begin
-         x86._op_reg_qword_ptr_reg(gpOp_add, tmpReg, gprRBP, stepValueOffset);
+         x86._op_reg_qword_ptr_reg(stepOp, tmpReg, gprRBP, stepValueOffset);
       end;
 
       x86._mov_execmem_reg(e.VarExpr.StackAddr, tmpReg);
@@ -3291,10 +3418,14 @@ begin
    end else begin
 
       if stepValueIsConstant then begin
-         x86._add_execmem_imm(e.VarExpr.StackAddr, stepValue);
+         if upwardLoop then
+            x86._add_execmem_imm(e.VarExpr.StackAddr, stepValue)
+         else x86._sub_execmem_imm(e.VarExpr.StackAddr, stepValue);
       end else begin
          x86._mov_reg_qword_ptr_reg(gprRAX, gprRBP, stepValueOffset);
-         x86._add_execmem_reg(e.VarExpr.StackAddr, gprRAX);
+         if upwardLoop then
+            x86._add_execmem_reg(e.VarExpr.StackAddr, gprRAX)
+         else x86._sub_execmem_reg(e.VarExpr.StackAddr, gprRAX);
       end;
 
    end;
@@ -3410,38 +3541,29 @@ end;
 
 // DoCompileFloat
 //
-{function Tx86ModFloat.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
+function Tx86ModFloat.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
 var
    e : TModFloatExpr;
    regLeft, regRight : TxmmRegister;
-   loop : TFixupTarget;
 begin
-   e:=TModFloatExpr(expr);
+   e := TModFloatExpr(expr);
 
-   jit.FPreamble.NeedTempSpace(SizeOf(Double));
+   regLeft := jit.CompileFloat(e.Left);
+   regRight := jit.CompileFloat(e.Right);
 
-   regRight:=jit.CompileFloat(e.Right);
-   x86._movsd_esp_reg(regRight);
-   x86._fld_esp;
-   jit.ReleaseXMMReg(regRight);
-
-   regLeft:=jit.CompileFloat(e.Left);
-   x86._movsd_esp_reg(regLeft);
-   x86._fld_esp;
+   x86._movsd_reg_reg(xmm0, regLeft);
    jit.ReleaseXMMReg(regLeft);
+   x86._xmm_reg_reg(xmm_divsd, xmm0, regRight);
 
-   loop:=jit.Fixups.NewTarget(False);
-   x86.WriteBytes([$D9, $F8]); // fprem
-   x86.WriteBytes([$DF, $E0]); // fnstsw ax
-   x86.WriteByte($9E);         // sahf
-   jit.Fixups.NewJump(flagsP, loop);
+   jit.SaveRegisters;
 
-   x86._ffree(1);
+   x86._call_absmem(@vAddr_Frac);
 
-   x86._fstp_esp;
-   Result:=jit.AllocXMMReg(expr);
-   x86._movsd_reg_esp(Result);
-end;}
+   jit.RestoreRegisters;
+
+   Result := jit.AllocOrAcquireXMMReg(regRight, expr);
+   x86._xmm_reg_reg(xmm_multsd, Result, xmm0);
+end;
 
 // ------------------
 // ------------------ Tx86SqrFloat ------------------
@@ -3821,11 +3943,10 @@ procedure Tx86BoolVar.DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFals
 var
    e : TBoolVarExpr;
 begin
-   e:=TBoolVarExpr(expr);
+   e := TBoolVarExpr(expr);
 
    x86._cmp_execmem_imm(e.StackAddr, 0);
-   jit.Fixups.NewJump(flagsNZ, targetTrue);
-   jit.Fixups.NewJump(targetFalse);
+   jit.Fixups.NewConditionalJumps(flagsNZ, targetTrue, targetFalse);
 end;
 
 // DoCompileAssignBoolean
@@ -4603,20 +4724,42 @@ end;
 function Tx86MultIntPow2.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
 var
    e : TMultIntPow2Expr;
-   srcReg : TgpRegister64;
+   operand : TgpRegister64;
 begin
    e := TMultIntPow2Expr(expr);
 
-   srcReg := jit.CompileIntegerToRegister(e.Expr);
-   if jit.IsSymbolGPReg(srcReg) then begin
-      jit.ReleaseGPReg(srcReg);
-      Result := jit.AllocGPReg(expr);
-      x86._mov_reg_reg(Result, srcReg);
-   end else begin
-      Result := srcReg;
-      jit.SetContainsGPReg(Result, expr);
-   end;
+   operand := jit.CompileIntegerToRegister(e.Expr);
+
+   Result := jit.AllocOrAcquireGPReg(operand, expr);
+
    x86._shift_reg_imm(gpShl, Result, e.Shift+1);
+end;
+
+// ------------------
+// ------------------ Tx86SqrInt ------------------
+// ------------------
+
+// DoCompileInteger
+//
+function Tx86SqrInt.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
+var
+   e : TSqrIntExpr;
+begin
+   e := TSqrIntExpr(expr);
+   Result := CompileIntegerOperand(expr, e.Expr);
+end;
+
+// CompileIntegerOperand
+//
+function Tx86SqrInt.CompileIntegerOperand(sqrExpr, operandExpr : TTypedExpr) : TgpRegister64;
+var
+   regOperand : TgpRegister64;
+begin
+   regOperand := jit.CompileIntegerToRegister(operandExpr);
+
+   Result := jit.AllocOrAcquireGPReg(regOperand, sqrExpr);
+
+   x86._imul_reg_reg(Result, Result);
 end;
 
 // ------------------
@@ -5070,18 +5213,17 @@ end;
 function Tx86BoolXorExpr.DoCompileBooleanValue(expr : TTypedExpr) : TgpRegister64;
 var
    e : TBooleanBinOpExpr;
-   left, right : TgpRegister64;
+   right : TgpRegister64;
 begin
    e := TBooleanBinOpExpr(expr);
 
-   left := jit.CompileBooleanValueToRegister(e.Left);
+   Result := jit.CompileBooleanValueToRegister(e.Left);
    right := jit.CompileBooleanValueToRegister(e.Right);
 
-   jit.ReleaseGPReg(right);
-   jit.SetContainsGPReg(left, expr);
-   Result := left;
+   jit.SetContainsGPReg(Result, expr);
 
    x86._xor_reg_reg(Result, right);
+   jit.ReleaseGPReg(right);
 end;
 
 // DoCompileBoolean
@@ -5093,8 +5235,86 @@ begin
    reg := DoCompileBooleanValue(expr);
    jit.ReleaseGPReg(reg);
 
+   // flags set by final xor in CompileBooleanValue
    jit.Fixups.NewConditionalJumps(flagsNZ, targetTrue, targetFalse);
 end;
+
+// ------------------
+// ------------------ Tx86BoolImpliesExpr ------------------
+// ------------------
+
+// DoCompileBoolean
+//
+procedure Tx86BoolImpliesExpr.DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup);
+var
+   e : TBooleanBinOpExpr;
+begin
+   e := TBooleanBinOpExpr(expr);
+
+   jit.CompileBoolean(e.Left, nil, targetTrue);
+   jit.CompileBoolean(e.Right, targetTrue, targetFalse);
+end;
+
+// ------------------
+// ------------------ Tx86CoalesceIntExpr ------------------
+// ------------------
+
+// DoCompileInteger
+//
+function Tx86CoalesceIntExpr.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
+var
+   e : TCoalesceIntExpr;
+   left, right : TgpRegister64;
+   targetRight, targetDone : TFixupTarget;
+begin
+   e := TCoalesceIntExpr(expr);
+
+   targetRight := jit.Fixups.NewHangingTarget(False);
+   targetDone := jit.Fixups.NewHangingTarget(False);
+
+   left := jit.CompileIntegerToRegister(e.Left);
+   x86._test_reg_reg(left, left);
+
+   jit.Fixups.NewConditionalJumps(flagsZ, targetRight, nil);
+
+   Result := jit.AllocOrAcquireGPReg(left, expr);
+
+   jit.Fixups.NewJump(targetDone);
+
+   jit.Fixups.AddFixup(targetRight);
+
+   right := jit.CompileIntegerToRegister(e.Right);
+
+   x86._mov_reg_reg(Result, right);
+   jit.ReleaseGPReg(right);
+
+   jit.Fixups.AddFixup(targetDone);
+end;
+
+// ------------------
+// ------------------ Tx86BitwiseInOpExpr ------------------
+// ------------------
+
+// DoCompileBoolean
+//
+procedure Tx86BitwiseInOpExpr.DoCompileBoolean(expr : TTypedExpr; targetTrue, targetFalse : TFixup);
+var
+   e : TBitwiseInOpExpr;
+   reg : TgpRegister64;
+begin
+   e := TBitwiseInOpExpr(expr);
+
+   reg := jit.CompileIntegerToRegister(e.Expr);
+   x86._cmp_reg_imm(reg, 32);
+   jit.Fixups.NewJump(flagsAE, targetFalse);
+   x86._mov_reg_reg(gprRCX, reg);
+   jit.ReleaseGPReg(reg);
+   x86._mov_reg_imm(gprRAX, 1);
+   x86._shl_rax_cl;
+   x86._test_reg_imm(gprRAX, e.Mask);
+   jit.Fixups.NewConditionalJumps(flagsNZ, targetTrue, targetFalse);
+end;
+
 
 {
 // ------------------
@@ -5337,6 +5557,21 @@ end;
 // ------------------ Tx86MagicFunc ------------------
 // ------------------
 
+// CompileStatement
+//
+procedure Tx86MagicFunc.CompileStatement(expr : TExprBase);
+var
+   jitter : TdwsJITter_x86;
+   e : TMagicFuncExpr;
+begin
+   e := (expr as TMagicFuncExpr);
+
+   jitter := TdwsJITter_x86(jit.FindJITter(TMagicFuncSymbol(e.FuncSym).InternalFunction.ClassType));
+   if jitter <> nil then
+      jitter.CompileStatement(expr)
+   else inherited;
+end;
+
 // DoCompileFloat
 //
 function Tx86MagicFunc.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
@@ -5353,7 +5588,6 @@ begin
 
    else Result:=inherited;
 end;
-
 
 // DoCompileInteger
 //
@@ -5468,7 +5702,7 @@ begin
 
    jit.SaveRegisters;
 
-   x86._call_absmem(addrPtr);
+   x86._call_absmem(AddrPtr);
 
    jit.RestoreRegisters;
 
@@ -5566,18 +5800,8 @@ begin
 
    x86._test_reg_reg(opReg, opReg);
 
-   if jit.IsSymbolGPReg(opReg) then begin
+   Result := jit.AllocOrAcquireGPReg(opReg, expr);
 
-      Result := jit.AllocGPReg(expr);
-      x86._mov_reg_reg(Result, opReg);
-      jit.ReleaseGPReg(opReg);
-
-   end else begin
-
-      Result := opReg;
-      jit.SetContainsGPReg(Result, expr);
-
-   end;
    jump := jit.Fixups.NewJump(flagsNL);
 
    x86._neg_reg(Result);
@@ -5638,6 +5862,17 @@ end;
 function Tx86SqrFloatFunc.DoCompileFloat(expr : TTypedExpr) : TxmmRegister;
 begin
    Result:=CompileFloatOperand(expr, TMagicFuncExpr(expr).Args[0] as TTypedExpr);
+end;
+
+// ------------------
+// ------------------ Tx86SqrIntFunc ------------------
+// ------------------
+
+// DoCompileInteger
+//
+function Tx86SqrIntFunc.DoCompileInteger(expr : TTypedExpr) : TgpRegister64;
+begin
+   Result := CompileIntegerOperand(expr, TMagicFuncExpr(expr).Args[0] as TTypedExpr);
 end;
 
 // ------------------
@@ -5802,12 +6037,13 @@ end;
 // DoCompileBooleanValue
 //
 function Tx86OddFunc.DoCompileBooleanValue(expr : TTypedExpr) : TgpRegister64;
+var
+   operand : TgpRegister64;
 begin
-   Result := jit.CompileIntegerToRegister(TMagicFuncExpr(expr).Args[0] as TTypedExpr);
+   operand := jit.CompileIntegerToRegister(TMagicFuncExpr(expr).Args[0] as TTypedExpr);
 
-   x86._test_reg_imm(result, 1);
-   x86._set_al_flags(flagsNZ);
-   x86._movsx_reg_al(result);
+   Result := jit.AllocOrAcquireGPReg(operand, expr);
+   x86._op_reg_imm(gpOp_and, Result, 1);
 end;
 
 // ------------------

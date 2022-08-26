@@ -3548,11 +3548,15 @@ function TidyStringsUnifier : Integer;
 var
    i : Integer;
    su : array [0..High(vUnifiedStrings)] of TStringUnifier;
+   p : Pointer;
 begin
    Result := 0;
    for i := Low(vUnifiedStrings) to High(vUnifiedStrings) do begin
       repeat
-         su[i] := TStringUnifier(InterlockedCompareExchangePointer(vUnifiedStrings[i], nil, vUnifiedStrings[i]));
+         p := vUnifiedStrings[i];
+         if p <> nil then
+            su[i] := TStringUnifier(InterlockedCompareExchangePointer(vUnifiedStrings[i], nil, p))
+         else su[i] := nil;
       until su[i] <> nil;
       Result := Result + su[i].FCount;
       su[i].Clear;
@@ -7910,8 +7914,10 @@ end;
 function TClassInstanceTemplate<T>.CreateInstance : T;
 begin
    Result := FPool;
-   if Result <> nil then
-      Result := InterlockedCompareExchangePointer(FPool, nil, Pointer(Result));
+   if Result <> nil then begin
+      if InterlockedCompareExchangePointer(FPool, nil, Pointer(Result)) <> Pointer(Result) then
+         Result := nil;
+   end;
    if Result = nil then
       Result := GetMemory(T.InstanceSize);
    System.Move(Pointer(FTemplate)^, Pointer(Result)^, T.InstanceSize);

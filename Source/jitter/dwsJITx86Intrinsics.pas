@@ -379,8 +379,8 @@ type
          procedure _mov_reg_reg(dest : TxmmRegister; src : TgpRegister64); overload;
          procedure _mov_reg_dword(reg : TgpRegister64d; imm : DWORD); overload;
          procedure _mov_reg_dword(reg : TgpRegister64; imm : DWORD); overload;
-         procedure _mov_reg_qword(reg : TgpRegister64; imm : QWORD); overload;
-         procedure _mov_reg_imm(reg : TgpRegister64; imm : Int64); overload;
+         procedure _mov_reg_qword(reg : TgpRegister64; imm : QWORD; preserveFlags : Boolean = False); overload;
+         procedure _mov_reg_imm(reg : TgpRegister64; imm : Int64; preserveFlags : Boolean = False); overload;
          procedure _mov_al_byte(imm : Byte);
 
          procedure _movsd_qword_ptr_reg_reg(dest : TgpRegister64; offset : Integer; src : TxmmRegister);
@@ -434,6 +434,7 @@ type
          procedure _not_reg(reg : TgpRegister64);
 
          procedure _shift_reg_imm(shift : TgpShift; reg : TgpRegister64; value : Byte);
+         procedure _shl_rax_cl;
 
          procedure _cmp_reg_imm(reg : TgpRegister64; value : Int64); overload;
          procedure _cmp_reg_reg(left, right : TgpRegister64);
@@ -605,7 +606,7 @@ const
       'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'
       );
    cgpRegister8bitName : array [TgpRegister] of UnicodeString = (
-      'al', 'cl', 'dl', 'bl', '??', '??', '??', '??'
+      'al', 'cl', 'dl', 'bl', '??', '??', 'sil', 'dil'
       );
    cgpRegister64Name : array [TgpRegister64] of UnicodeString = (
       'rax', 'rcx', 'rdx', 'rbx', 'rsp', 'rbp', 'rsi', 'rdi',
@@ -614,6 +615,10 @@ const
    cgpRegister64dName : array [TgpRegister64] of UnicodeString = (
       'eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi',
       'r8d', 'r9d', 'r10d', 'r11d', 'r12d', 'r13d', 'r14d', 'r15d'
+      );
+   cgpRegister64bName : array [TgpRegister64] of UnicodeString = (
+      'al', 'cl', 'dl', 'bl', '??', '??', 'sil', 'dil',
+      'r8L', 'r9L', 'r10L', 'r11L', 'r12L', 'r13L', 'r14L', 'r15L'
       );
    cExecMemGPR = {$ifdef WIN32} gprEBX {$endif} {$ifdef WIN64} gprRBX {$endif};
 
@@ -2311,33 +2316,27 @@ end;
 
 // _mov_reg_qword
 //
-procedure Tx86_64_WriteOnlyStream._mov_reg_qword(reg : TgpRegister64; imm : QWORD);
+procedure Tx86_64_WriteOnlyStream._mov_reg_qword(reg : TgpRegister64; imm : QWORD; preserveFlags : Boolean = False);
 begin
-   if imm=0 then
+   if (imm = 0) and not preserveFlags then
       _xor_reg_reg(reg, reg)
-   else if Int32(imm) = Int64(imm) then begin
-      if (Int32(imm) > 0) and (reg < gprR8) then begin
-         // 32 bit GPR assignment are zero extended on the higher bits
-         WriteByte($B8 + Ord(reg));
-      end else begin
-         WriteBytes([
-            $48 + Ord(reg >= gprR8),
-            $c7,
-            $c0 + (Ord(reg) and 7)
-         ]);
-      end;
+   else if UInt32(imm) = Int64(imm) then begin
+      // 32 bit GPR assignment are zero extended on the higher bits
+      if reg >= gprR8 then
+         WriteByte($41);
+      WriteByte($B8 + (Ord(reg) and 7));
       WriteInt32(imm);
    end else begin
-      WriteBytes([$48 + Ord(reg >= gprR8), $b8 + (Ord(reg) and 7)]);
+      WriteBytes([$48 + Ord(reg >= gprR8), $B8 + (Ord(reg) and 7)]);
       WriteQWord(imm);
    end;
 end;
 
 // _mov_reg_imm
 //
-procedure Tx86_64_WriteOnlyStream._mov_reg_imm(reg : TgpRegister64; imm : Int64);
+procedure Tx86_64_WriteOnlyStream._mov_reg_imm(reg : TgpRegister64; imm : Int64; preserveFlags : Boolean = False);
 begin
-   _mov_reg_qword(reg, QWORD(imm))
+   _mov_reg_qword(reg, QWORD(imm), preserveFlags)
 end;
 
 // _mov_al_byte
@@ -2792,6 +2791,13 @@ begin
    end;
 end;
 
+// _shl_rax_cl
+//
+procedure Tx86_64_WriteOnlyStream._shl_rax_cl;
+begin
+   WriteBytes([$48, $D3, $E0]);
+end;
+
 // _not_reg
 //
 procedure Tx86_64_WriteOnlyStream._not_reg(reg : TgpRegister64);
@@ -2873,16 +2879,30 @@ end;
 //
 procedure Tx86_64_WriteOnlyStream._test_reg_imm(reg : TgpRegister64; value : Int64);
 begin
-   if Int32(value) = value then begin
+   if (Byte(value) = value) and not (reg in [ gprRSP, gprRBP ]) then begin
       case reg of
          gprRAX :
-            WriteBytes([ $48, $A9 ]);
-         gprRCX..gprRDI :
-            WriteBytes([ $48, $F7, $C0 + (Ord(reg) and 7) ]);
+            WriteBytes([ $A8 ]);
+         gprRCX..gprRBX :
+            WriteBytes([ $F6, $C0 + (Ord(reg) and 7) ]);
+         gprRSI..gprRDI :
+            WriteBytes([ $40, $F6, $C0 + (Ord(reg) and 7) ]);
       else
-         WriteBytes([ $49, $F7, $C0 + (Ord(reg) and 7) ]);
+         WriteBytes([ $41, $F6, $C0 + (Ord(reg) and 7) ]);
       end;
-      WriteInt32(value);
+      WriteByte(value);
+   end else if DWord(value) = value then begin
+      case reg of
+         gprRAX :
+            WriteBytes([ $A9 ]);
+         gprRCX..gprRBX :
+            WriteBytes([ $F7, $C0 + (Ord(reg) and 7) ]);
+         gprRSI..gprRDI :
+            WriteBytes([ $F7, $C0 + (Ord(reg) and 7) ]);
+      else
+         WriteBytes([ $41, $F7, $C0 + (Ord(reg) and 7) ]);
+      end;
+      WriteDWord(value);
    end else Assert(False);
 end;
 

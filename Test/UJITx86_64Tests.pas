@@ -60,7 +60,7 @@ type
          procedure cmp_reg_imm;
          procedure ops;
          procedure test_reg_reg;
-//         procedure test_reg_int32;
+         procedure test_reg_int32;
 //         procedure test_dword_ptr_reg_int32;
 //         procedure test_dword_ptr_reg_byte;
 //         procedure test_dword_ptr_reg_reg;
@@ -460,6 +460,7 @@ begin
                , DisasmStream);
 
    FStream._mov_reg_imm(gprRAX, 0);
+   FStream._mov_reg_imm(gprRAX, 0, True);
    FStream._mov_reg_imm(gprRDX, 0);
    FStream._mov_reg_imm(gprR9, 0);
    FStream._mov_reg_imm(gprRAX, 1);
@@ -473,11 +474,12 @@ begin
    FStream._mov_reg_imm(gprR11, $11223344556677);
 
    CheckEquals( 'xor rax, rax'#13#10
+               +'mov eax, 00000000h'#13#10
                +'xor rdx, rdx'#13#10
                +'xor r9, r9'#13#10
                +'mov eax, 00000001h'#13#10
                +'mov rax, FFFFFFFFFFFFFFFFh'#13#10
-               +'mov r8, 0000000000000002h'#13#10
+               +'mov r8d, 00000002h'#13#10
                +'mov r8, FFFFFFFFFFFFFFFEh'#13#10
                +'mov eax, 00000003h'#13#10
                +'mov rax, FFFFFFFFFFFFFFFDh'#13#10
@@ -536,17 +538,10 @@ begin
       FStream._mov_reg_imm(dest, -1);
       FStream._mov_reg_imm(dest, -2);
       regName := cgpRegister64Name[dest];
-      reg32Name := 'e' + Copy(regName, 2);
-      expect := 'xor ' + regName  + ', ' + regName + #13#10;
-      if dest < gprR8 then
-         expect := expect
-                 + 'mov '+reg32Name+', 00000001h'#13#10
-                 + 'mov '+reg32Name+', 00000080h'#13#10
-      else
-         expect := expect
-                 + 'mov '+regName+', 0000000000000001h'#13#10
-                 + 'mov '+regName+', 0000000000000080h'#13#10;
-      expect := expect
+      reg32Name := cgpRegister64dName[dest];
+      expect := 'xor ' + regName  + ', ' + regName + #13#10
+              + 'mov '+reg32Name+', 00000001h'#13#10
+              + 'mov '+reg32Name+', 00000080h'#13#10
               + 'mov '+regName+', FFFFFFFFFFFFFFFFh'#13#10
               + 'mov '+regName+', FFFFFFFFFFFFFFFEh'#13#10;
       CheckEquals(expect, DisasmStream);
@@ -1216,28 +1211,30 @@ begin
       CheckEquals(expect, DisasmStream);
    end;
 end;
-{
+
 // test_reg_int32
 //
 procedure TJITx86_64Tests.test_reg_int32;
 var
-   reg : TgpRegister;
+   reg : TgpRegister64;
    expect : String;
 begin
-   for reg:=gprEAX to gprEDI do begin
+   for reg:=gprRAX to gprR15 do begin
+      if reg in [ gprRSP, gprRBP ] then continue;
       FStream._test_reg_imm(reg, $40);
       FStream._test_reg_imm(reg, $180);
       case reg of
-         gprEAX : expect:='test '+cgpRegister8bitName[reg]+', 40h'#13#10;
-         gprECX..gprEBX : expect:= 'test '+cgpRegister8bitName[reg]+', 00000040h'#13#10;
+         gprRAX : expect:='test '+cgpRegister64bName[reg]+', 40h'#13#10;
+         gprRCX..gprRDI : expect:= 'test '+cgpRegister64bName[reg]+', 40h'#13#10;
+//         gprRSP..gprRDI : expect:= 'test '+cgpRegister64dName[reg]+', 40h'#13#10;
       else
-         expect:= 'test '+cgpRegisterName[reg]+', 00000040h'#13#10;
+         expect:= 'test '+cgpRegister64bName[reg]+', 40h'#13#10;
       end;
-      expect:=expect+'test '+cgpRegisterName[reg]+', 00000180h'#13#10;
+      expect:=expect+'test '+cgpRegister64dName[reg]+', 00000180h'#13#10;
       CheckEquals(expect, DisasmStream);
    end;
 end;
-
+{
 // test_dword_ptr_reg_int32
 //
 procedure TJITx86_64Tests.test_dword_ptr_reg_int32;
