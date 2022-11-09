@@ -95,11 +95,21 @@ type
       function SpecializeTypedExpr(const context : ISpecializationContext) : TTypedExpr; override;
    end;
 
-   // Static Array to Dynamic Array
-   TConvStaticArrayToDynamicExpr = class sealed (TUnaryOpExpr)
+   // Array Constant (inline) to Dynamic Array
+   TConvArrayConstantToDynamicExpr = class sealed (TUnaryOpExpr)
       public
          constructor Create(context : TdwsCompilerContext; const aScriptPos : TScriptPos;
                             expr : TArrayConstantExpr; toTyp : TDynamicArraySymbol); reintroduce;
+         procedure EvalAsVariant(exec : TdwsExecution; var result : Variant); override;
+         procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
+         function GetIsConstant : Boolean; override;
+   end;
+
+   // Static Array (value) to Dynamic Array
+   TConvStaticArrayToDynamicExpr = class sealed (TUnaryOpExpr)
+      public
+         constructor Create(context : TdwsCompilerContext; const aScriptPos : TScriptPos;
+                            expr : TTypedExpr; toTyp : TDynamicArraySymbol); reintroduce;
          procedure EvalAsVariant(exec : TdwsExecution; var result : Variant); override;
          procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
          function GetIsConstant : Boolean; override;
@@ -266,14 +276,14 @@ begin
       Exit;
    end;
 
-   if expr.ClassType=TArrayConstantExpr then begin
+   if expr.ClassType = TArrayConstantExpr then begin
 
       arrayConst:=TArrayConstantExpr(expr);
       if toTyp is TDynamicArraySymbol then begin
          if    (toTyp.Typ.IsOfType(expr.Typ.Typ))
             or ((arrayConst.ElementCount=0) and (arrayConst.Typ.Typ.IsOfType(context.TypVariant)))  then
-            Result:=TConvStaticArrayToDynamicExpr.Create(context, scriptPos, arrayConst,
-                                                         TDynamicArraySymbol(toTyp))
+            Result:=TConvArrayConstantToDynamicExpr.Create(context, scriptPos, arrayConst,
+                                                           TDynamicArraySymbol(toTyp))
       end else if toTyp is TSetOfSymbol then begin
          if arrayConst.ElementCount=0 then begin
             Result:=TConstExpr.Create(cNullPos, toTyp);
@@ -305,6 +315,12 @@ begin
          if toTyp.Typ<>expr.Typ then
             Result:=TClassAsClassExpr.Create(context, scriptPos, Result, toTyp);
       end;
+
+   end else if     (toTyp is TDynamicArraySymbol)
+               and (expr.Typ is TStaticArraySymbol)
+               and expr.Typ.Typ.SameType(toTyp.Typ) then begin
+
+      Result := TConvStaticArrayToDynamicExpr.Create(context, scriptPos, expr, TDynamicArraySymbol(toTyp));
 
    end else if toTyp.UnAliasedTypeIs(TConnectorSymbol) then begin
 
@@ -495,12 +511,12 @@ begin
 end;
 
 // ------------------
-// ------------------ TConvStaticArrayToDynamicExpr ------------------
+// ------------------ TConvArrayConstantToDynamicExpr ------------------
 // ------------------
 
 // Create
 //
-constructor TConvStaticArrayToDynamicExpr.Create(context : TdwsCompilerContext; const aScriptPos : TScriptPos;
+constructor TConvArrayConstantToDynamicExpr.Create(context : TdwsCompilerContext; const aScriptPos : TScriptPos;
                                                  expr : TArrayConstantExpr; toTyp : TDynamicArraySymbol);
 begin
    inherited Create(context, aScriptPos, expr);
@@ -509,7 +525,7 @@ end;
 
 // EvalAsVariant
 //
-procedure TConvStaticArrayToDynamicExpr.EvalAsVariant(exec : TdwsExecution; var result : Variant);
+procedure TConvArrayConstantToDynamicExpr.EvalAsVariant(exec : TdwsExecution; var result : Variant);
 var
    dynArray : IScriptDynArray;
 begin
@@ -519,7 +535,7 @@ end;
 
 // EvalAsScriptDynArray
 //
-procedure TConvStaticArrayToDynamicExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
+procedure TConvArrayConstantToDynamicExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 var
    arr : TArrayConstantExpr;
 
@@ -553,6 +569,54 @@ begin
          ConvDirectly
       else ConvThroughDataContext;
    end;
+end;
+
+// GetIsConstant
+//
+function TConvArrayConstantToDynamicExpr.GetIsConstant : Boolean;
+begin
+   Result := False;
+end;
+
+// ------------------
+// ------------------ TConvStaticArrayToDynamicExpr ------------------
+// ------------------
+
+// Create
+//
+constructor TConvStaticArrayToDynamicExpr.Create(context : TdwsCompilerContext; const aScriptPos : TScriptPos;
+                                                 expr : TTypedExpr; toTyp : TDynamicArraySymbol);
+begin
+   inherited Create(context, aScriptPos, expr);
+   Typ:=toTyp;
+end;
+
+// EvalAsVariant
+//
+procedure TConvStaticArrayToDynamicExpr.EvalAsVariant(exec : TdwsExecution; var result : Variant);
+var
+   dynArray : IScriptDynArray;
+begin
+   EvalAsScriptDynArray(exec, dynArray);
+   VarCopySafe(Result, dynArray);
+end;
+
+// EvalAsScriptDynArray
+//
+procedure TConvStaticArrayToDynamicExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
+var
+   elementTyp : TTypeSymbol;
+   staticTyp : TStaticArraySymbol;
+   dc : IDataContext;
+begin
+   elementTyp := TDynamicArraySymbol(Typ).Typ;
+   CreateNewDynamicArray(elementTyp, result);
+
+   staticTyp := Expr.Typ.UnAliasedType as TStaticArraySymbol;
+
+   (Expr as TDataExpr).GetDataPtr(exec, dc);
+   result.ArrayLength := staticTyp.ElementCount;
+   result.WriteData(0, dc, 0, staticTyp.ElementCount * staticTyp.Typ.Size);
 end;
 
 // GetIsConstant

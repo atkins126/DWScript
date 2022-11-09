@@ -89,7 +89,7 @@ type
          constructor Create;
 
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
-         procedure InitDataContext(const data : IDataContext; offset : Integer); override;
+         procedure InitDataContext(const data : IDataContext; offset : NativeInt); override;
    end;
 
    TFileOpenFunc = class(TInternalMagicVariantFunction)
@@ -370,25 +370,25 @@ end;
 //
 function TdwsFileHandle.Seek(offset : Int64; origin : Integer) : Int64;
 begin
-   Result := FileSeek(FHandle, offset, origin);
+   Result := SysUtils.FileSeek(FHandle, offset, origin);
 end;
 
 // Size
 //
 function TdwsFileHandle.Size : Int64;
 var
-   p : Integer;
+   p : Int64;
 begin
-   p := FileSeek(FHandle, 0, soFromCurrent);
-   Result := FileSeek(FHandle, 0, soFromEnd);
-   FileSeek(FHandle, p, soFromBeginning);
+   p := Seek(0, soFromCurrent);
+   Result := Seek(0, soFromEnd);
+   Seek(p, soFromBeginning);
 end;
 
 // Position
 //
 function TdwsFileHandle.Position : Int64;
 begin
-   Result := FileSeek(FHandle, 0, soFromCurrent);
+   Result := Seek(0, soFromCurrent);
 end;
 
 // Read
@@ -485,7 +485,7 @@ end;
 
 // InitDataContext
 //
-procedure TBaseFileSymbol.InitDataContext(const data : IDataContext; offset : Integer);
+procedure TBaseFileSymbol.InitDataContext(const data : IDataContext; offset : NativeInt);
 begin
    data.SetNilInterface(offset);
 end;

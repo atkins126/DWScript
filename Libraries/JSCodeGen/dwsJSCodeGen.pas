@@ -596,6 +596,10 @@ type
       procedure CodeGenNoWrap(codeGen : TdwsCodeGen; expr : TTypedExpr); override;
    end;
 
+   TJSConvArrayConstantToDynamicExpr = class (TJSExprCodeGen)
+      procedure CodeGenNoWrap(codeGen : TdwsCodeGen; expr : TTypedExpr); override;
+   end;
+
    TJSConvStaticArrayToDynamicExpr = class (TJSExprCodeGen)
       procedure CodeGenNoWrap(codeGen : TdwsCodeGen; expr : TTypedExpr); override;
    end;
@@ -1126,6 +1130,7 @@ begin
    RegisterCodeGen(TConvFloatToBoolExpr,  TdwsExprGenericCodeGen.Create(['(', 0, '?true:false)']));
    RegisterCodeGen(TConvVarToBoolExpr,    TdwsExprGenericCodeGen.Create(['$VarToBool', '(', 0, ')'], gcgExpression, '$VarToBool'));
    RegisterCodeGen(TConvVarToStringExpr,  TJSConvStringExpr.Create);
+   RegisterCodeGen(TConvArrayConstantToDynamicExpr, TJSConvArrayConstantToDynamicExpr.Create);
    RegisterCodeGen(TConvStaticArrayToDynamicExpr, TJSConvStaticArrayToDynamicExpr.Create);
    RegisterCodeGen(TConvVariantExpr,      TdwsExprGenericCodeGen.Create([0]));
    RegisterCodeGen(TConvExternalExpr,     TdwsExprGenericCodeGen.Create([0]));
@@ -2791,9 +2796,9 @@ begin
             WriteString(#10);
       end;
 
-      processedDependencies:=TStringList.Create;
-      processedDependencies.Sorted:=True;
+      processedDependencies := TFastCompareTextList.Create;
       try
+         processedDependencies.Sorted := True;
          // expand dependencies
          repeat
             n:=Dependencies.List.Count;
@@ -6395,6 +6400,21 @@ begin
 end;
 
 // ------------------
+// ------------------ TJSConvArrayConstantToDynamicExpr ------------------
+// ------------------
+
+// CodeGenNoWrap
+//
+procedure TJSConvArrayConstantToDynamicExpr.CodeGenNoWrap(codeGen : TdwsCodeGen; expr : TTypedExpr);
+var
+   e : TConvArrayConstantToDynamicExpr;
+begin
+   e := TConvArrayConstantToDynamicExpr(expr);
+
+   codeGen.Compile(e.Expr);
+end;
+
+// ------------------
 // ------------------ TJSConvStaticArrayToDynamicExpr ------------------
 // ------------------
 
@@ -6404,9 +6424,11 @@ procedure TJSConvStaticArrayToDynamicExpr.CodeGenNoWrap(codeGen : TdwsCodeGen; e
 var
    e : TConvStaticArrayToDynamicExpr;
 begin
-   e:=TConvStaticArrayToDynamicExpr(expr);
+   e := TConvStaticArrayToDynamicExpr(expr);
 
+   codeGen.WriteString('(');
    codeGen.Compile(e.Expr);
+   codeGen.WriteString(').slice()');
 end;
 
 // ------------------
