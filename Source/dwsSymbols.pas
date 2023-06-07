@@ -23,7 +23,8 @@ unit dwsSymbols;
 
 interface
 
-uses SysUtils, Classes, System.Math, TypInfo,
+uses
+   System.SysUtils, System.Classes, System.Math, System.Types, System.TypInfo,
    dwsErrors, dwsUtils, dwsDateTime, dwsScriptSource, dwsSpecialKeywords,
    dwsTokenTypes, dwsStack, dwsDataContext, dwsArrayMethodKinds
    {$ifdef FPC},LazUTF8{$endif};
@@ -213,6 +214,11 @@ type
 
    TExprBaseClass = class of TExprBase;
 
+   TExprBaseTaxonomy = (
+      ebtExprBase,
+      ebtBlockExprBase
+   );
+
    TExprBase = class (TRefCountedObject)
       protected
          function GetSubExpr(i : Integer) : TExprBase; virtual;
@@ -252,6 +258,8 @@ type
 
          function ScriptPos : TScriptPos; virtual; abstract;
          function ScriptLocation(prog : TObject) : String; virtual; abstract;
+
+         function Taxonomy : TExprBaseTaxonomy; virtual;
 
          function FuncSymQualifiedName :String; virtual;
          class function CallStackToString(const callStack : TdwsExprLocationArray) : String; static;
@@ -594,7 +602,8 @@ type
 
    TScriptDataSymbolPurpose = (
       sdspGeneral,         // general purpose / unspecified use case
-      sdspLoopIterator     // iterator variable in a for loop
+      sdspLoopIterator,    // iterator variable in a for loop
+      sdspScriptInternal   // internal use for script engine only
    );
 
    // variable: var x: Integer;
@@ -1002,6 +1011,12 @@ type
                         maOverlap, maClassMethod, maFinal, maDefault, maInterfaced,
                         maStatic, maIgnoreMissingImplementation );
    TMethodAttributes = set of TMethodAttribute;
+   TMethodCreateOption = (
+      mcoClassMethod,
+      mcoHelperMethod
+   );
+   TMethodCreateOptions = set of TMethodCreateOption;
+
 
    // A method of a script class: TMyClass = class procedure X(param: String); end;
    TMethodSymbol = class (TFuncSymbol)
@@ -1040,7 +1055,7 @@ type
 
       public
          constructor Create(const Name: String; FuncKind: TFuncKind; aStructSymbol : TCompositeTypeSymbol;
-                            aVisibility : TdwsVisibility; isClassMethod : Boolean;
+                            aVisibility : TdwsVisibility; aCreateOptions : TMethodCreateOptions;
                             funcLevel : Integer = 1); virtual;
 
          constructor Generate(Table: TSymbolTable; MethKind: TMethodKind;
@@ -1269,6 +1284,8 @@ type
                             aMin, aMax : Integer);
 
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
+         function SameType(typSym : TTypeSymbol) : Boolean; override;
+
          procedure InitDataContext(const data : IDataContext; offset : NativeInt); override;
 
          function AssignsAsDataExpr : Boolean; override;
@@ -1289,6 +1306,7 @@ type
          FSortFunctionType : TFuncSymbol;
          FMapFunctionType : TFuncSymbol;
          FFilterFunctionType : TFuncSymbol;
+         FForEachFunctionType : TFuncSymbol;
 
       protected
          function ElementSize : Integer;
@@ -1306,6 +1324,7 @@ type
          function SortFunctionType(baseSymbols : TdwsBaseSymbolsContext) : TFuncSymbol; virtual;
          function MapFunctionType(baseSymbols : TdwsBaseSymbolsContext) : TFuncSymbol; virtual;
          function FilterFunctionType(baseSymbols : TdwsBaseSymbolsContext) : TFuncSymbol; virtual;
+         function ForEachFunctionType(baseSymbols : TdwsBaseSymbolsContext) : TFuncSymbol; virtual;
 
          property IndexType : TTypeSymbol read FIndexType write FIndexType;
    end;
@@ -1506,7 +1525,8 @@ type
 
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; virtual; abstract;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
-                                        isClassMethod : Boolean) : TMethodSymbol; virtual; abstract;
+                                        aCreateOptions : TMethodCreateOptions
+                                        ) : TMethodSymbol; virtual; abstract;
 
          function FirstField : TFieldSymbol; inline;
 
@@ -1634,7 +1654,7 @@ type
 
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; override;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
-                                        isClassMethod : Boolean) : TMethodSymbol; override;
+                                        aCreateOptions : TMethodCreateOptions) : TMethodSymbol; override;
 
          procedure InitDataContext(const data : IDataContext; offset : NativeInt); override;
          function DynamicInitialization : Boolean; override;
@@ -1676,7 +1696,7 @@ type
 
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; override;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
-                                        isClassMethod : Boolean) : TMethodSymbol; override;
+                                        aCreateOptions : TMethodCreateOptions) : TMethodSymbol; override;
 
          function Parent : TInterfaceSymbol; inline;
          property MethodCount : Integer read FMethodCount;
@@ -1881,7 +1901,7 @@ type
 
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; override;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
-                                        isClassMethod : Boolean) : TMethodSymbol; override;
+                                        aCreateOptions : TMethodCreateOptions) : TMethodSymbol; override;
 
          class function VisibilityToString(visibility : TdwsVisibility) : String; static;
 
@@ -1927,7 +1947,7 @@ type
          function AllowDefaultProperty : Boolean; override;
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; override;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
-                                        isClassMethod : Boolean) : TMethodSymbol; override;
+                                        aCreateOptions : TMethodCreateOptions) : TMethodSymbol; override;
 
          procedure Initialize(const msgs : TdwsCompileMessageList); override;
 
@@ -2289,6 +2309,7 @@ type
       procedure NaturalSort;
 
       procedure AddStrings(sl : TStrings);
+      procedure AppendString(index : NativeInt; const str : String);
 
       function GetAsFloat(index : NativeInt) : Double;
       procedure SetAsFloat(index : NativeInt; const v : Double);
@@ -2325,7 +2346,7 @@ type
    PIScriptDynArray = ^IScriptDynArray;
 
    // IScriptAssociativeArray
-   IScriptAssociativeArray = interface (IDataContext)
+   IScriptAssociativeArray = interface (IGetSelf)
       ['{1162D4BD-6033-4505-8D8C-0715588C768C}']
       procedure Clear;
       function Count : NativeInt;
@@ -2624,6 +2645,13 @@ var
 begin
    EvalAsVariant(exec, buf);
    dc.AsVariant[offset] := buf;
+end;
+
+// Taxonomy
+//
+function TExprBase.Taxonomy : TExprBaseTaxonomy;
+begin
+   Result := ebtExprBase;
 end;
 
 // ------------------
@@ -3400,10 +3428,12 @@ end;
 // CreateAnonymousMethod
 //
 function TRecordSymbol.CreateAnonymousMethod(
-      aFuncKind : TFuncKind; aVisibility : TdwsVisibility; isClassMethod : Boolean) : TMethodSymbol;
+      aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
+      aCreateOptions : TMethodCreateOptions
+      ) : TMethodSymbol;
 begin
-   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, isClassMethod);
-   if isClassMethod then
+   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, aCreateOptions);
+   if mcoClassMethod in aCreateOptions then
       TSourceMethodSymbol(Result).SetIsStatic;
 end;
 
@@ -3668,9 +3698,11 @@ end;
 // CreateAnonymousMethod
 //
 function TInterfaceSymbol.CreateAnonymousMethod(
-      aFuncKind : TFuncKind; aVisibility : TdwsVisibility; isClassMethod : Boolean) : TMethodSymbol;
+      aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
+      aCreateOptions : TMethodCreateOptions
+      ) : TMethodSymbol;
 begin
-   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, isClassMethod);
+   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, aCreateOptions);
 end;
 
 // DoIsOfType
@@ -4569,13 +4601,16 @@ end;
 
 // Create
 //
-constructor TMethodSymbol.Create(const Name: String; FuncKind: TFuncKind;
-  aStructSymbol : TCompositeTypeSymbol; aVisibility : TdwsVisibility; isClassMethod : Boolean;
-  funcLevel : Integer);
+constructor TMethodSymbol.Create(
+   const Name: String; FuncKind: TFuncKind;
+   aStructSymbol : TCompositeTypeSymbol; aVisibility : TdwsVisibility;
+   aCreateOptions : TMethodCreateOptions;
+   funcLevel : Integer
+);
 begin
    inherited Create(Name, FuncKind, funcLevel);
    FStructSymbol := aStructSymbol;
-   if isClassMethod then
+   if mcoClassMethod in aCreateOptions then
       Include(FAttributes, maClassMethod);
    FSelfSym := aStructSymbol.CreateSelfParameter(Self);
    FSize:=1; // wrapped in a interface
@@ -4599,21 +4634,21 @@ begin
    // Initialize MethodSymbol
    case MethKind of
       mkConstructor:
-         Create(MethName, fkConstructor, Cls, aVisibility, False);
+         Create(MethName, fkConstructor, Cls, aVisibility, []);
       mkDestructor:
-         Create(MethName, fkDestructor, Cls, aVisibility, False);
+         Create(MethName, fkDestructor, Cls, aVisibility, []);
       mkProcedure:
-         Create(MethName, fkProcedure, Cls, aVisibility, False);
+         Create(MethName, fkProcedure, Cls, aVisibility, []);
       mkFunction:
-         Create(MethName, fkFunction, Cls, aVisibility, False);
+         Create(MethName, fkFunction, Cls, aVisibility, []);
       mkMethod :
-         Create(MethName, fkMethod, Cls, aVisibility, False);
+         Create(MethName, fkMethod, Cls, aVisibility, []);
       mkClassProcedure:
-         Create(MethName, fkProcedure, Cls, aVisibility, True);
+         Create(MethName, fkProcedure, Cls, aVisibility, [ mcoClassMethod ]);
       mkClassFunction:
-         Create(MethName, fkFunction, Cls, aVisibility, True);
+         Create(MethName, fkFunction, Cls, aVisibility, [ mcoClassMethod ]);
       mkClassMethod:
-         Create(MethName, fkMethod, Cls, aVisibility, True);
+         Create(MethName, fkMethod, Cls, aVisibility, [ mcoClassMethod ]);
    else
       Assert(False);
    end;
@@ -4924,10 +4959,15 @@ end;
 function TMethodSymbol.SpecializeType(const context : ISpecializationContext) : TTypeSymbol;
 var
    specializedMethod : TMethodSymbol;
+   createOptions : TMethodCreateOptions;
 begin
+   if IsClassMethod then
+      createOptions := [ mcoClassMethod ]
+   else createOptions := [];
+
    specializedMethod := TMethodSymbolClass(ClassType).Create(
       Name, Kind, context.CompositeSymbol,
-      Visibility, IsClassMethod, Level
+      Visibility, createOptions, Level
    );
 
    if IsStatic then
@@ -5867,9 +5907,11 @@ end;
 // CreateAnonymousMethod
 //
 function TClassSymbol.CreateAnonymousMethod(
-      aFuncKind : TFuncKind; aVisibility : TdwsVisibility; isClassMethod : Boolean) : TMethodSymbol;
+      aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
+      aCreateOptions : TMethodCreateOptions
+      ) : TMethodSymbol;
 begin
-   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, isClassMethod);
+   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, aCreateOptions);
 end;
 
 // VisibilityToString
@@ -7589,11 +7631,21 @@ end;
 function TSetOfSymbol.IsCompatible(typSym : TTypeSymbol) : Boolean;
 begin
    typSym := typSym.UnAliasedType;
-   if typSym is TSetOfSymbol then begin
-      Result:=     TSetOfSymbol(typSym).Typ.IsOfType(Typ)
-              and  (TSetOfSymbol(typSym).MinValue=MinValue)
-              and  (TSetOfSymbol(typSym).CountValue=CountValue);
-   end else Result:=False;
+   if typSym.ClassType = TSetOfSymbol then begin
+      Result :=    Typ.SameType(typSym.Typ)
+                or (
+                         typSym.Typ.IsOfType(Typ)
+                    and  (TSetOfSymbol(typSym).MinValue = MinValue)
+                    and  (TSetOfSymbol(typSym).CountValue = CountValue)
+                    );
+   end else Result := False;
+end;
+
+// SameType
+//
+function TSetOfSymbol.SameType(typSym : TTypeSymbol) : Boolean;
+begin
+   Result := Assigned(typSym) and (typSym.ClassType = TSetOfSymbol) and Typ.SameType(typSym.Typ);
 end;
 
 // InitDataContext
@@ -7832,6 +7884,17 @@ begin
    Result := FFilterFunctionType;
 end;
 
+// ForEachFunctionType
+//
+function TArraySymbol.ForEachFunctionType(baseSymbols : TdwsBaseSymbolsContext) : TFuncSymbol;
+begin
+   if FForEachFunctionType = nil then begin
+      FForEachFunctionType := TFuncSymbol.Create('', fkProcedure, 0);
+      FForEachFunctionType.AddParam(TParamSymbol.Create('v', Typ));
+   end;
+   Result := FForEachFunctionType;
+end;
+
 // ------------------
 // ------------------ TDynamicArraySymbol ------------------
 // ------------------
@@ -7915,6 +7978,11 @@ begin
       amkFilter : begin
          Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
          Result.Params.AddSymbol(TParamSymbol.Create('func', FilterFunctionType(baseSymbols)));
+         Result.Typ := Self;
+      end;
+      amkForEach : begin
+         Result := TPseudoMethodSymbol.Create(Self, methodName, fkFunction, 0);
+         Result.Params.AddSymbol(TParamSymbol.Create('func', ForEachFunctionType(baseSymbols)));
          Result.Typ := Self;
       end;
       amkDelete : begin
@@ -9468,10 +9536,10 @@ end;
 //
 function THelperSymbol.CreateAnonymousMethod(aFuncKind : TFuncKind;
                                              aVisibility : TdwsVisibility;
-                                             isClassMethod : Boolean) : TMethodSymbol;
+                                             aCreateOptions : TMethodCreateOptions) : TMethodSymbol;
 begin
-   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, isClassMethod);
-   if isClassMethod and (not ForType.HasMetaSymbol) then
+   Result:=TSourceMethodSymbol.Create('', aFuncKind, Self, aVisibility, aCreateOptions);
+   if (mcoClassMethod in aCreateOptions) and (not ForType.HasMetaSymbol) then
       TSourceMethodSymbol(Result).SetIsStatic;
 end;
 

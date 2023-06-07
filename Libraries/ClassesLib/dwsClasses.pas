@@ -4,7 +4,9 @@ unit dwsClasses;
 
 interface
 
-uses Windows, SysUtils, Classes, dwsUtils, dwsXPlatform;
+uses
+   System.SysUtils, System.Classes,
+   dwsUtils, dwsXPlatform;
 
 type
 
@@ -451,18 +453,13 @@ end;
 
 procedure TdwsStrings.LoadFromStream(Stream: TStream);
 var
-  Size: Integer;
-  S: String;
+   characterSize : Integer;
+   buffer : String;
 begin
-  BeginUpdate;
-  try
-    Size := Stream.Size - Stream.Position;
-    SetString(S, nil, Size);
-    Stream.Read(Pointer(S)^, Size*SizeOf(Char));
-    SetTextStr(S);
-  finally
-    EndUpdate;
-  end;
+   characterSize := (Stream.Size - Stream.Position) div SizeOf(Char);
+   SetString(buffer, nil, characterSize);
+   Stream.Read(Pointer(buffer)^, characterSize*SizeOf(Char));
+   SetTextStr(buffer);
 end;
 
 procedure TdwsStrings.Move(CurIndex, NewIndex: Integer);

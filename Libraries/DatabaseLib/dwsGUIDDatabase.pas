@@ -23,7 +23,7 @@ unit dwsGUIDDatabase;
 interface
 
 uses
-   Classes, SysUtils,
+   System.Classes, System.SysUtils, System.Types,
    dwsUtils, dwsExprs, dwsDatabase, dwsStack, dwsXPlatform, dwsDataContext, dwsSymbols;
 
 type

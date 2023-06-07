@@ -23,7 +23,7 @@ unit dwsJSCodeGen;
 interface
 
 uses
-   Classes, SysUtils, Math, Variants,
+   System.Classes, System.SysUtils, System.Math, System.Variants,
    dwsUtils, dwsSymbols, dwsCodeGen, dwsTextCodeGen, dwsCoreExprs, dwsDataContext,
    dwsExprs, dwsRelExprs, dwsJSON, dwsMagicExprs, dwsStrings, dwsMethodExprs,
    dwsConnectorExprs, dwsConvExprs, dwsSetOfExprs, dwsCompilerUtils,
@@ -434,6 +434,9 @@ type
       procedure CodeGen(codeGen : TdwsCodeGen; expr : TExprBase); override;
    end;
    TJSArrayFilterExpr = class (TJSExprCodeGen)
+      procedure CodeGen(codeGen : TdwsCodeGen; expr : TExprBase); override;
+   end;
+   TJSArrayForEachExpr = class (TJSExprCodeGen)
       procedure CodeGen(codeGen : TdwsCodeGen; expr : TExprBase); override;
    end;
    TJSArrayRemoveExpr = class (TJSExprCodeGen)
@@ -1185,6 +1188,7 @@ begin
 
    RegisterCodeGen(TAppendStringVarExpr,  TJSAppendStringVarExpr.Create);
    RegisterCodeGen(TAppendConstStringVarExpr,      TJSAppendConstStringVarExpr.Create);
+   RegisterCodeGen(TAppendStringFieldExpr,  TJSAppendStringVarExpr.Create);
 
    RegisterCodeGen(TPlusAssignIntExpr,    TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
    RegisterCodeGen(TPlusAssignFloatExpr,  TJSCompoundExpr.Create('+=', '$DIdxAdd', '$AKeyAdd'));
@@ -1386,6 +1390,7 @@ begin
    RegisterCodeGen(TArraySortExpr,                 TJSArraySortExpr.Create);
    RegisterCodeGen(TArrayMapExpr,                  TJSArrayMapExpr.Create);
    RegisterCodeGen(TArrayFilterExpr,               TJSArrayFilterExpr.Create);
+   RegisterCodeGen(TArrayForEachExpr,              TJSArrayForEachExpr.Create);
    RegisterCodeGen(TArrayConcatExpr,               TJSArrayConcatExpr.Create);
    RegisterCodeGen(TArraySortNaturalStringExpr,    TJSArrayTypedFluentExpr.Create('.sort()', ''));
    RegisterCodeGen(TArraySortNaturalExpr,          TJSArrayTypedFluentExpr.Create('.sort()', ''));
@@ -2675,6 +2680,9 @@ begin
       symClassType := sym.ClassType;
       if (symClassType = TVarDataSymbol) or (symClassType = TScriptDataSymbol)  then begin
 
+         if (symClassType = TScriptDataSymbol) and (TScriptDataSymbol(sym).Purpose = sdspScriptInternal) then
+            continue;
+
          varSym := TDataSymbol(sym);
          if FDeclaredLocalVars.IndexOf(varSym) < 0 then begin
             FDeclaredLocalVars.Add(varSym);
@@ -3120,7 +3128,7 @@ var
 begin
    for i:=0 to initExpr.SubExprCount-1 do begin
       curExpr:=initExpr.SubExpr[i];
-      if curExpr is TBlockExprBase then begin
+      if curExpr.Taxonomy = ebtBlockExprBase then begin
          CollectInitExprLocalVars(TBlockExprBase(curExpr));
       end else if (curExpr is TAssignExpr) or (curExpr is TInitDataExpr) then begin
          subExpr:=curExpr.SubExpr[0];
@@ -3929,7 +3937,7 @@ begin
    blockInit := TBlockExprBase(expr);
    for i := 0 to blockInit.SubExprCount-1 do begin
       initExpr := blockInit.SubExpr[i];
-      if initExpr is TBlockExprBase then begin
+      if initExpr.Taxonomy = ebtBlockExprBase then begin
 
          EndVar;
          oldTable := codeGen.LocalTable;
@@ -4038,6 +4046,7 @@ begin
          if (symClassType = TVarDataSymbol) or (symClassType = TScriptDataSymbol)  then begin
             sym := TDataSymbol(iterSym);
             if sym.HasExternalName then continue;
+            if (symClassType = TScriptDataSymbol) and (TScriptDataSymbol(sym).Purpose = sdspScriptInternal) then continue;
             if jsCodeGen.FDeclaredLocalVars.IndexOf(sym) >= 0 then continue;
 
             jsCodeGen.FDeclaredLocalVars.Add(sym);
@@ -7490,6 +7499,24 @@ begin
    codeGen.WriteString('.filter(');
    codeGen.CompileNoWrap((e.FilterFuncExpr as TFuncPtrExpr).CodeExpr);
    codeGen.WriteString(')');
+end;
+
+// ------------------
+// ------------------ TJSArrayForEachExpr ------------------
+// ------------------
+
+// CodeGen
+//
+procedure TJSArrayForEachExpr.CodeGen(codeGen : TdwsCodeGen; expr : TExprBase);
+var
+   e : TArrayForEachExpr;
+begin
+   e:=TArrayForEachExpr(expr);
+
+   codeGen.Compile(e.BaseExpr);
+   codeGen.WriteString('.forEach(');
+   codeGen.CompileNoWrap((e.ForEachFuncExpr as TFuncPtrExpr).CodeExpr);
+   codeGen.WriteStringLn(');');
 end;
 
 // ------------------

@@ -24,7 +24,8 @@ unit dwsStringFunctions;
 interface
 
 uses
-   Classes, SysUtils, StrUtils, Math, Masks, Character,
+   System.Classes, System.SysUtils, System.StrUtils,
+   System.Math, System.Masks, System.Character,
    dwsXPlatform, dwsUtils, dwsStrings,
    dwsFunctions, dwsSymbols, dwsExprs, dwsCoreExprs, dwsExprList,
    dwsConstExprs, dwsMagicExprs, dwsDataContext, dwsWebUtils, dwsJSON;
@@ -95,6 +96,10 @@ type
 
   TVarToFloatDefFunc = class(TInternalMagicFloatFunction)
     procedure DoEvalAsFloat(const args : TExprBaseListExec; var Result : Double); override;
+  end;
+
+  TTryStrToFloatFunc = class(TInternalMagicBoolFunction)
+    function DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean; override;
   end;
 
   TStrToHtmlFunc = class(TInternalMagicStringFunction)
@@ -601,6 +606,19 @@ begin
    except
       Result := args.AsFloat[1];
    end;
+end;
+
+{ TTryStrToFloatFunc }
+
+function TTryStrToFloatFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
+var
+   s : String;
+   v : Double;
+begin
+   args.EvalAsString(0, s);
+   Result := TryStrToDouble(s, v);
+   if Result then
+      args.AsFloat[1] := v;
 end;
 
 { TStrToHtmlFunc }
@@ -1436,6 +1454,7 @@ initialization
    RegisterInternalFloatFunction(TStrToFloatFunc, 'StrToFloat', ['str', SYS_STRING], [iffStateLess], 'ToFloat');
    RegisterInternalFloatFunction(TStrToFloatDefFunc, 'StrToFloatDef', ['str', SYS_STRING, 'def', SYS_FLOAT], [iffStateLess], 'ToFloatDef');
    RegisterInternalFloatFunction(TVarToFloatDefFunc, 'VarToFloatDef', ['val', SYS_VARIANT, 'def', SYS_FLOAT], [iffStateLess]);
+   RegisterInternalBoolFunction(TTryStrToFloatFunc, 'TryStrToFloat', ['str', SYS_STRING, '@value', SYS_FLOAT ], [ iffStateLess ]);
 
    RegisterInternalStringFunction(TStrToHtmlFunc, 'StrToHtml', ['str', SYS_STRING], [iffStateLess], 'ToHtml');
    RegisterInternalStringFunction(TStrToHtmlAttributeFunc, 'StrToHtmlAttribute', ['str', SYS_STRING], [iffStateLess], 'ToHtmlAttribute');

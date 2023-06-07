@@ -871,7 +871,7 @@ begin
    end;
 
    // create helper method symbol
-   meth:=TAliasMethodSymbol.Create(name, func.Kind, helper, cvPublic, False);
+   meth:=TAliasMethodSymbol.Create(name, func.Kind, helper, cvPublic, [ mcoHelperMethod ]);
    meth.SetIsStatic;
    if func.IsOverloaded then
       meth.IsOverloaded:=True;
@@ -1033,6 +1033,13 @@ begin
    end else if expr.Typ.IsOfType(context.TypVariant) then begin
 
       Result := TConvExpr.WrapWithConvCast(context, hotPos, toTyp, expr, msg);
+
+   end else if     (expr.Typ = context.TypNil)
+               and (   toTyp.IsClassSymbol
+                    or toTyp.UnAliasedTypeIs(TInterfaceSymbol)) then begin
+
+      Result := TConstNilExpr.Create(expr.ScriptPos, toTyp);
+      expr.Free;
 
    end else begin
 

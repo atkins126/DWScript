@@ -20,46 +20,12 @@ interface
 
 
 uses
-   Classes, SysUtils, StrUtils, DateUtils,
+   System.Classes, System.SysUtils, System.StrUtils, System.DateUtils,
    SynCrtSock, SynCommons,
    dwsExprs, dwsUtils, dwsWebUtils, dwsWebServerUtils, dwsWebServerHelpers,
-   dwsSymbols, dwsExprList, dwsXPlatform;
+   dwsSymbols, dwsExprList, dwsXPlatform, dwsWebEnvironmentTypes;
 
 type
-   TWebRequestAuthentication = (
-      wraNone,
-      wraFailed,
-      wraBasic,
-      wraDigest,
-      wraNTLM,
-      wraNegotiate,
-      wraKerberos,
-      wraAuthorization
-   );
-   TWebRequestAuthentications = set of TWebRequestAuthentication;
-
-   TWebRequestMethodVerb = (
-      wrmvUnknown,
-      wrmvOPTIONS,
-      wrmvGET,
-      wrmvHEAD,
-      wrmvPOST,
-      wrmvPUT,
-      wrmvDELETE,
-      wrmvTRACE,
-      wrmvCONNECT,
-      wrmvTRACK,
-      wrmvMOVE,
-      wrmvCOPY,
-      wrmvPROPFIND,
-      wrmvPROPPATCH,
-      wrmvMKCOL,
-      wrmvLOCK,
-      wrmvUNLOCK,
-      wrmvSEARCH
-   );
-   TWebRequestMethodVerbs = set of TWebRequestMethodVerb;
-
    TWebServerEventData = array of RawByteString;
 
    TWebRequest = class
@@ -126,6 +92,9 @@ type
          function HasQueryField(const name : String) : Boolean;
          function HasContentField(const name : String) : Boolean;
 
+         function URLBeginsWith(const aBegin : String) : Boolean; virtual;
+         function URLEquals(const anURL : String) : Boolean; virtual;
+
          function IfModifiedSince : TdwsDateTime;
          function IfNoneMatch : String;
 
@@ -162,7 +131,7 @@ type
          function AddCookie(const name : String) : TWebResponseCookie;
    end;
 
-   TWebResponseHint = (shStatic, shCompression);
+   TWebResponseHint = (shStatic, shCompression, shLogAsException);
    TWebResponseHints = set of TWebResponseHint;
 
    TWebResponse = class
@@ -301,12 +270,6 @@ const
    cWebRequestAuthenticationToString : array [TWebRequestAuthentication] of String = (
       'None', 'Failed', 'Basic', 'Digest', 'NTLM', 'Negotiate', 'Kerberos', 'Header'
    );
-
-   cWebRequestMethodVerbs : array [TWebRequestMethodVerb] of String = (
-      '?', 'OPTIONS', 'GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'TRACE',
-      'CONNECT', 'TRACK', 'MOVE', 'COPY', 'PROPFIND', 'PROPPATCH',
-      'MKCOL', 'LOCK', 'UNLOCK', 'SEARCH' );
-
 
    cHTMTL_UTF8_CONTENT_TYPE = 'text/html; charset=utf-8';
 
@@ -447,15 +410,15 @@ begin
    cookieField:=Header('Cookie');
    base:=1;
    while True do begin
-      p:=StrUtils.PosEx('=', cookieField, base);
-      next:=StrUtils.PosEx(';', cookieField, p);
+      p := System.StrUtils.PosEx('=', cookieField, base);
+      next := System.StrUtils.PosEx(';', cookieField, p);
       if (p>base) and (next>p) then begin
-         AddCookie(SysUtils.Trim(Copy(cookieField, base, p-base)), Copy(cookieField, p+1, pred(next-p)));
+         AddCookie(System.SysUtils.Trim(Copy(cookieField, base, p-base)), Copy(cookieField, p+1, pred(next-p)));
          base:=next+1;
       end else Break;
    end;
    if (p>base) and (base<Length(cookieField)) then
-      AddCookie(SysUtils.Trim(Copy(cookieField, base, p-base)), Copy(cookieField, p+1));
+      AddCookie(System.SysUtils.Trim(Copy(cookieField, base, p-base)), Copy(cookieField, p+1));
 end;
 
 // PrepareQueryFields
@@ -567,6 +530,20 @@ end;
 function TWebRequest.HasContentField(const name : String) : Boolean;
 begin
    Result:=WebUtils.HasFieldName(ContentFields, name);
+end;
+
+// URLBeginsWith
+//
+function TWebRequest.URLBeginsWith(const aBegin : String) : Boolean;
+begin
+   Result := StrBeginsWith(URL, aBegin);
+end;
+
+// URLEquals
+//
+function TWebRequest.URLEquals(const anURL : String) : Boolean;
+begin
+   Result := (URL = anURL);
 end;
 
 // IfModifiedSince

@@ -20,7 +20,8 @@ unit dwsCodeGen;
 interface
 
 uses
-   Classes, SysUtils,     dwsXPlatform,
+   System.Classes, System.SysUtils,
+   dwsXPlatform,
    dwsUtils, dwsSymbols, dwsExprs, dwsCoreExprs, dwsDataContext, dwsConstExprs,
    dwsStrings, dwsUnitSymbols, dwsErrors, dwsRTTIFunctions, dwsSymbolDictionary,
    dwsContextMap, dwsCompilerContext;
@@ -698,8 +699,8 @@ end;
 procedure TdwsCodeGen.CompileStatement(expr : TExprBase);
 begin
    Compile(expr);
-   if expr is TNoResultExpr then
-   else WriteStatementEnd;
+   if not (expr is TNoResultExpr) then
+      WriteStatementEnd;
 end;
 
 // CompileNoWrap

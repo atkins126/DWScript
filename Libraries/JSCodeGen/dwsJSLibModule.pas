@@ -21,7 +21,7 @@ unit dwsJSLibModule;
 interface
 
 uses
-   Classes, SysUtils, Variants,
+   System.Classes, System.SysUtils, System.Variants,
    dwsLanguageExtension, dwsComp, dwsCompiler, dwsDataContext, dwsConnectorSymbols,
    dwsExprs, dwsTokenTypes, dwsTokenizer, dwsSymbols, dwsErrors, dwsCoreExprs,
    dwsStrings, dwsXPlatform, StrUtils, dwsUtils, dwsOperators, dwsUnitSymbols,
@@ -384,7 +384,7 @@ begin
    jObject.IsExternal:=True;
    jObject.SetNoVirtualMembers;
 
-   meth:=TMethodSymbol.Create('', fkConstructor, jObject, cvPublic, False);
+   meth:=TMethodSymbol.Create('', fkConstructor, jObject, cvPublic, []);
    meth.Executable:=ICallable(TEmptyFunc.Create);
    meth.IsDefault:=True;
    jObject.AddMethod(meth);

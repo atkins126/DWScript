@@ -50,6 +50,7 @@ type
 
       procedure AppendChar(c : Char);
       procedure Grow;
+      procedure Clear; inline;
       function LastChar : Char;
       function ToStr : String; overload; inline;
       procedure ToStr(var result : String); overload;
@@ -79,10 +80,11 @@ type
          FNext : TToken;
 
       public
-         FScriptPos : TScriptPos;
          FFloat : Double;
          FInteger : Int64;
          FTyp : TTokenType;
+         FScriptPos : TScriptPos;
+         FPosPtr : PChar;
 
          property AsString : String read FString;
 
@@ -108,10 +110,16 @@ type
          procedure SetElse(o : TTransition);
    end;
 
-   TConvertAction = (caNone, caClear, caName, caNameEscaped,
-                     caBin, caHex, caInteger, caFloat,
-                     caChar, caCharHex, caString, caMultiLineString,
-                     caSwitch, caDotDot, caAmp, caAmpAmp);
+   TConvertAction = (
+      caNone,
+      caClear,
+      caName, caNameEscaped,
+      caBin, caHex, caInteger, caFloat,
+      caChar, caCharHex, caString, caMultiLineString,
+      caSwitch,
+      caDotDot, caAmp, caAmpAmp,
+      caEndOfText
+      );
    TTransitionOptions = set of (toStart, toFinal);
 
    TTransition = class (TRefCountedObject)
@@ -199,6 +207,7 @@ type
    end;
 
    TTokenizerEndSourceFileEvent = procedure (sourceFile : TSourceFile) of object;
+   TTokenizerActionEvent = procedure (tokenizer : TTokenizer; action : TConvertAction) of object;
 
    TTokenizer = class
       private
@@ -218,6 +227,7 @@ type
 
          FSourceStack : array of TTokenizerSourceInfo;
          FOnEndSourceFile : TTokenizerEndSourceFileEvent;
+         FOnBeforeAction : TTokenizerActionEvent;
 
          procedure AllocateToken;
          procedure ReleaseToken;
@@ -245,6 +255,9 @@ type
          function GetToken : TToken; inline;
          function HasTokens : Boolean;
          procedure KillToken; inline;
+
+         function RawTokenBuffer : String;
+         function RawTokenBufferNameToType : TTokenType;
 
          function Test(t : TTokenType) : Boolean;
          function TestAny(const t : TTokenTypes) : TTokenType;
@@ -279,7 +292,9 @@ type
          property SwitchHandler : TSwitchHandler read FSwitchHandler write FSwitchHandler;
          property SwitchProcessor : TSwitchHandler read FSwitchProcessor write FSwitchProcessor;
          property ConditionalDefines : IAutoStrings read FConditionalDefines write FConditionalDefines;
+
          property OnEndSourceFile : TTokenizerEndSourceFileEvent read FOnEndSourceFile write FOnEndSourceFile;
+         property OnBeforeAction : TTokenizerActionEvent read FOnBeforeAction write FOnBeforeAction;
    end;
 
 // ------------------------------------------------------------------
@@ -317,6 +332,13 @@ begin
       Capacity:=256
    else Capacity:=Capacity*2;
    SetLength(Buffer, Capacity);
+end;
+
+// Clear
+//
+procedure TTokenBuffer.Clear;
+begin
+   Len := 0;
 end;
 
 // LastChar
@@ -1286,6 +1308,7 @@ begin
    AllocateToken;
    FToken.FTyp:=t;
    FToken.FScriptPos:=scriptPos;
+   FToken.FPosPtr:=nil;
 end;
 
 // SimulateStringToken
@@ -1443,7 +1466,7 @@ procedure TTokenizer.ConsumeToken;
    // don't trigger error for EOF
    procedure DoErrorTransition(trns : TErrorTransition; ch : Char);
    begin
-      if trns.ErrorMessage<>'' then begin
+      if trns.ErrorMessage <> '' then begin
          case ch of
             #0 :
                FMsgs.AddCompilerError(CurrentPos, trns.ErrorMessage);
@@ -1462,6 +1485,7 @@ procedure TTokenizer.ConsumeToken;
          caClear : begin
             FTokenBuf.Len:=0;
             FToken.FScriptPos:=DefaultPos;
+            FToken.FPosPtr:=nil;
          end;
 
          // Convert name to token
@@ -1511,18 +1535,21 @@ procedure TTokenizer.ConsumeToken;
             if HandleSwitch then Exit(True);
 
          caDotDot : begin
+            FToken.FPosPtr:=PosPtr;
             FToken.FScriptPos:=CurrentPos;
             FToken.FScriptPos.Col:=FToken.FScriptPos.Col-1;
             FToken.FTyp:=ttDOTDOT;
          end;
 
          caAmp : begin
+            FToken.FPosPtr:=PosPtr;
             FToken.FScriptPos:=CurrentPos;
             FToken.FScriptPos.Col:=FToken.FScriptPos.Col-1;
             FToken.FTyp:=ttAMP;
          end;
 
          caAmpAmp : begin
+            FToken.FPosPtr:=PosPtr;
             FToken.FScriptPos:=CurrentPos;
             FToken.FScriptPos.Col:=FToken.FScriptPos.Col-2;
             FToken.FTyp:=ttAMP_AMP;
@@ -1576,6 +1603,8 @@ begin
 
       // Handle Errors
       if trns.IsError then begin
+         if Assigned(FOnBeforeAction) and (state <> FStartState) then
+            FOnBeforeAction(Self, caEndOfText);
          DoErrorTransition(trns as TErrorTransition, pch^);
          state := FStartState;
          FTokenBuf.Len:=0;
@@ -1588,8 +1617,10 @@ begin
       end;
 
       // A new token begins
-      if trns.Start and (FToken.FScriptPos.Col=0) then
+      if trns.Start then begin
          FToken.FScriptPos:=CurrentPos;
+         FToken.FPosPtr:=PosPtr;
+      end;
 
       // Proceed to the next character
       if trns.Seek then begin
@@ -1616,6 +1647,8 @@ begin
 
       // The characters in 's' have to be converted
       if trns.Action<>caNone then begin
+         if Assigned(FOnBeforeAction) then
+            FOnBeforeAction(Self, trns.Action);
          if DoAction(trns.Action) then begin
             state:=FRules.StartState;
             pch:=PosPtr;
@@ -1642,6 +1675,20 @@ end;
 procedure TTokenizer.KillToken;
 begin
    ReleaseToken;
+end;
+
+// RawTokenBuffer
+//
+function TTokenizer.RawTokenBuffer : String;
+begin
+   FTokenBuf.ToStr(Result);
+end;
+
+// RawTokenBufferNameToType
+//
+function TTokenizer.RawTokenBufferNameToType : TTokenType;
+begin
+   Result := FTokenBuf.ToType;
 end;
 
 // AllocateToken

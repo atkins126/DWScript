@@ -24,7 +24,7 @@ unit dwsDebugger;
 interface
 
 uses
-   Classes, SysUtils,
+   System.Classes, System.SysUtils,
    dwsSymbols, dwsXPlatform, dwsCompiler, dwsDataContext, dwsExprs,
    dwsInfo, dwsEvaluate, dwsScriptSource, dwsUtils, dwsUnitSymbols;
 
@@ -1067,7 +1067,7 @@ procedure TdwsDebugger.DoDebug(exec : TdwsExecution; expr : TExprBase);
 var
    ticks : Int64;
 begin
-   if expr is TBlockExprBase then begin
+   if expr.Taxonomy = ebtBlockExprBase then begin
       if (expr.ClassType<>TBlockInitExpr) or (expr.SubExprCount=0) then Exit;
    end;
    FCurrentExpression:=expr;
@@ -1791,7 +1791,7 @@ begin
       prog.InitExpr.EnumerateSteppableExprs(SteppableCallback);
    end;
 
-   if not (prog.Expr is TBlockExprBase) then
+   if not (prog.Expr.Taxonomy = ebtBlockExprBase) then
       RegisterScriptPos(prog.Expr.ScriptPos);
 
    prog.Expr.EnumerateSteppableExprs(SteppableCallback);

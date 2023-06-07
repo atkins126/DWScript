@@ -25,12 +25,12 @@ unit dwsUtils;
 interface
 
 uses
-   Classes, SysUtils, Types, StrUtils, Masks, Variants,
+   System.Classes, System.SysUtils, System.Types, System.StrUtils,
+   System.Masks, System.Variants,
    dwsStrings, dwsXPlatform, Math, dwsXXHash;
 
 type
 
-   TStringDynArray = array of String;
    TInt64DynArray = array of Int64;
    TUInt64DynArray = array of UInt64;
    TSingleDynArray = array of Single;
@@ -405,6 +405,16 @@ type
          procedure InsertItem(index : Integer; const anItem : T);
 
       public
+         type TSortedListEnumerator = record
+            private
+               FList : TSortedList<T>;
+               FIndex, FCountMinus1 : Integer;
+            public
+               function MoveNext: Boolean; inline;
+               function GetCurrent : T; inline;
+               property Current : T read GetCurrent;
+         end;
+
          function Add(const anItem : T) : Integer;
          function AddOrFind(const anItem : T; var added : Boolean) : Integer;
          function Extract(const anItem : T) : Integer;
@@ -413,6 +423,7 @@ type
          procedure Clear;
          procedure Clean;
          procedure Enumerate(const callback : TSimpleCallback<T>);
+         function GetEnumerator : TSortedListEnumerator;
          property Items[index : Integer] : T read GetItem; default;
          property Count : Integer read FCount;
    end;
@@ -852,6 +863,7 @@ type
          procedure WriteUTF8String(const utf8String : RawByteString); overload; inline;
          procedure WriteCRLF; inline;
          procedure WriteAsciiCRLF; inline;
+         procedure WriteIndent(nb : Integer; indentChar : WideChar = ' ');
          procedure WriteChar(utf16Char : WideChar); inline;
          procedure WriteDigits(value : Int64; digits : Integer); overload;
          procedure WriteDigits(value : Cardinal; digits : Integer); overload;
@@ -873,21 +885,16 @@ type
    end;
 
    TSimpleInt64List = class(TSimpleList<Int64>)
-      protected
-         procedure DoExchange(index1, index2 : Integer); inline;
-         procedure QuickSort(minIndex, maxIndex : Integer);
-
       public
          procedure Sort;
    end;
 
    TSimpleDoubleList = class(TSimpleList<Double>)
       protected
-         procedure QuickSort(minIndex, maxIndex : Integer);
          procedure MedianSort(minIndex, maxIndex : Integer);
 
       public
-         procedure Exchange(index1, index2 : Integer); inline;
+         procedure Exchange(index1, index2 : Integer);
          procedure Sort;
 
          function QuickSum : Double;
@@ -912,6 +919,7 @@ type
       function FindName(const name : String; var index : Integer) : Boolean;
       function IndexOfName(const name : String): Integer; override;
       {$endif}
+      procedure Reverse;
    end;
 
    TClassCloneConstructor<T: class, constructor> = record
@@ -1075,6 +1083,8 @@ procedure ScriptStringToRawByteString(const s : UnicodeString; var result : RawB
 procedure StringBytesToWords(var buf : UnicodeString; swap : Boolean);
 procedure StringWordsToBytes(var buf : UnicodeString; swap : Boolean);
 
+procedure UTF8DecodeToUnicodeString(pUTF8 : PAnsiChar; utf8Length : Integer; var decoded : String);
+
 type
    EHexEncodingException = class (Exception)
    end;
@@ -1165,7 +1175,14 @@ function ReadVariant(reader: TReader): Variant;
 
 function TryISO8601ToDateTime(const v : String; var aResult : TDateTime) : Boolean;
 function ISO8601ToDateTime(const v : String) : TDateTime;
-function DateTimeToISO8601(dt : TDateTime; extendedFormat : Boolean) : String;
+
+type
+   TISO8601Precision = (
+      iso8601precAuto,
+      iso8601precSeconds,
+      iso8601precMilliseconds
+   );
+function DateTimeToISO8601(dt : TDateTime; extendedFormat : Boolean; prec : TISO8601Precision = iso8601precAuto) : String;
 
 procedure dwsFreeAndNil(var O); // transitional function, do not use
 
@@ -1181,10 +1198,15 @@ function PopCount64(p : PInt64; nbInt64s : Integer) : Integer;
 function PopCount(p : PByte; n : Integer) : Integer;
 
 procedure SwapInt64(var a, b : Int64); inline;
+procedure SwapSingles(var a, b : Single); inline;
 procedure SwapDoubles(var a, b : Double); inline;
 procedure SwapPointers(var a, b : Pointer); inline;
 
 procedure TransferSimpleHashBuckets(const src, dest; nbSrcBuckets, nbDestBuckets, bucketSize : Integer);
+
+procedure QuickSortDoublePrecision(a : PDoubleArray; minIndex, maxIndex : NativeInt);
+procedure QuickSortInt64(a : PInt64Array; minIndex, maxIndex : NativeInt);
+procedure QuickSortString(a : PStringArray; minIndex, maxIndex : NativeInt);
 
 type
    EISO8601Exception = class (Exception);
@@ -1244,7 +1266,7 @@ begin
       n := Length(s1);
       if Length(s2) <> n then
          Result := False
-      else Result := SysUtils.CompareMem(Pointer(s1), Pointer(s2), n*SizeOf(Char));
+      else Result := System.SysUtils.CompareMem(Pointer(s1), Pointer(s2), n*SizeOf(Char));
    end;
 end;
 {$endif}
@@ -1422,6 +1444,20 @@ begin
       end;
       SetLength(buf, n);
    end else buf := '';
+end;
+
+// UTF8DecodeToUnicodeString
+//
+procedure UTF8DecodeToUnicodeString(pUTF8 : PAnsiChar; utf8Length : Integer; var decoded : String);
+begin
+   if utf8Length = 0 then begin
+      decoded := '';
+   end else begin
+      SetLength(decoded, utf8Length);
+      var nb : Integer := Utf8ToUnicode(PChar(decoded), utf8Length+1, pUTF8, utf8Length) - 1;
+      if nb <> utf8Length then
+         SetLength(decoded, nb);
+   end;
 end;
 
 // BinToHex
@@ -3059,9 +3095,9 @@ end;
 
 // DateTimeToISO8601
 //
-function DateTimeToISO8601(dt : TDateTime; extendedFormat : Boolean) : String;
+function DateTimeToISO8601(dt : TDateTime; extendedFormat : Boolean; prec : TISO8601Precision = iso8601precAuto) : String;
 var
-   buf : array [0..31] of Char;
+   buf : array [0..35] of Char;
    p : PChar;
 
    procedure WriteChar(c : Char);
@@ -3073,6 +3109,14 @@ var
    procedure Write2Digits(v : Integer);
    begin
       PTwoChars(p)^:=cTwoDigits[v];
+      Inc(p, 2);
+   end;
+
+   procedure Write3Digits(v : Integer);
+   begin
+      PChar(p)^ := Chr(Ord('0') + (v div 100));
+      Inc(p);
+      PTwoChars(p)^ := cTwoDigits[v mod 100];
       Inc(p, 2);
    end;
 
@@ -3096,10 +3140,14 @@ begin
    if extendedFormat then
       WriteChar(':');
    Write2Digits(n);
-   if s<>0 then begin
+   if (s <> 0) or (prec in [ iso8601precSeconds, iso8601precMilliseconds ]) then begin
       if extendedFormat then
          WriteChar(':');
       Write2Digits(s);
+   end;
+   if prec = iso8601precMilliseconds then begin
+      WriteChar('.');
+      Write3Digits(z);
    end;
    WriteChar('Z');
 
@@ -4226,6 +4274,21 @@ begin
 end;
 {$endif}
 
+// Reverse
+//
+procedure TFastCompareTextList.Reverse;
+var
+   i, j : Integer;
+begin
+   i := 0;
+   j := Count-1;
+   while i < j do begin
+      Exchange(i, j);
+      Inc(i);
+      Dec(j);
+   end;
+end;
+
 // ------------------
 // ------------------ TVarRecArrayContainer ------------------
 // ------------------
@@ -4903,6 +4966,30 @@ begin
          Break;
 end;
 
+// GetEnumerator
+//
+function TSortedList<T>.GetEnumerator : TSortedListEnumerator;
+begin
+   Result.FIndex := 0;
+   Result.FList := Self;
+   Result.FCountMinus1 := Count-1;
+end;
+
+// TSortedListEnumerator.MoveNext
+//
+function TSortedList<T>.TSortedListEnumerator.MoveNext: Boolean;
+begin
+   Result := FIndex < FCountMinus1;
+   Inc(FIndex, Integer(Result));
+end;
+
+// TSortedListEnumerator.GetCurrent
+//
+function TSortedList<T>.TSortedListEnumerator.GetCurrent : T;
+begin
+   Result := FList.FItems[FIndex];
+end;
+
 // ------------------
 // ------------------ TSimpleStack<T> ------------------
 // ------------------
@@ -5522,6 +5609,16 @@ begin
    WriteBuf(@cAsciiCRLF[0], 2*SizeOf(AnsiChar));
 end;
 
+// WriteIndent
+//
+procedure TWriteOnlyBlockStream.WriteIndent(nb : Integer; indentChar : WideChar = ' ');
+begin
+   while nb > 0 do begin
+      WriteChar(indentChar);
+      Dec(nb);
+   end;
+end;
+
 // ------------------
 // ------------------ TTightStack ------------------
 // ------------------
@@ -5597,10 +5694,6 @@ begin
    FList:=nil;
 end;
 
-// ------------------
-// ------------------ TSimpleHash<T> ------------------
-// ------------------
-
 // TransferSimpleHashBuckets
 //
 procedure TransferSimpleHashBuckets(const src, dest; nbSrcBuckets, nbDestBuckets, bucketSize : Integer);
@@ -5638,6 +5731,195 @@ begin
             Inc(ptrOld, 4);
          end;
       end else Inc(ptrOld, bucketSize);
+   end;
+end;
+
+// QuickSortDoublePrecision
+//
+procedure QuickSortDoublePrecision(a : PDoubleArray; minIndex, maxIndex : NativeInt);
+
+   procedure Swap(a : PDoubleArray; i1, i2 : NativeInt); inline;
+   begin
+      var buf : Double := a[i1];
+      a[i1] := a[i2];
+      a[i2] := buf;
+   end;
+
+var
+   i, j, p, n : NativeInt;
+begin
+   n := maxIndex-minIndex;
+   case n of
+      1 : begin
+         var v1 := a[minIndex];
+         var v2 := a[maxIndex];
+         if v1 > v2 then begin
+            a[minIndex] := v2;
+            a[maxIndex] := v1;
+         end;
+      end;
+      2 : begin
+         i := minIndex+1;
+         if a[minIndex] > a[i] then
+            Swap(a, minIndex, i);
+         if a[i] > a[maxIndex] then begin
+            Swap(a, i, maxIndex);
+            if a[minIndex] > a[i] then
+               Swap(a, minIndex, i);
+         end;
+      end;
+   else
+      if n <= 0 then Exit;
+      repeat
+         i := minIndex;
+         j := maxIndex;
+         p := ((i+j) shr 1);
+         repeat
+            var pivotValue : Double := a[p];
+            while a[i] < pivotValue do Inc(i);
+            while a[j] > pivotValue do Dec(j);
+            if i <= j then begin
+               if i <> j then begin
+                  var v1 := a[i];
+                  var v2 := a[j];
+                  a[i] := v2;
+                  a[j] := v1;
+               end;
+               if p = i then
+                  p := j
+               else if p = j then
+                  p := i;
+               Inc(i);
+               Dec(j);
+            end;
+         until i > j;
+         if minIndex < j then
+            QuickSortDoublePrecision(a, minIndex, j);
+         minIndex := i;
+      until i >= maxIndex;
+   end;
+end;
+
+// QuickSortInt64
+//
+procedure QuickSortInt64(a : PInt64Array; minIndex, maxIndex : NativeInt);
+
+   procedure Swap(a : PInt64Array; i1, i2 : NativeInt); inline;
+   begin
+      var buf : Int64 := a[i1];
+      a[i1] := a[i2];
+      a[i2] := buf;
+   end;
+
+var
+   i, j, p, n : NativeInt;
+begin
+   n := maxIndex-minIndex;
+   case n of
+      1 : begin
+         var v1 := a[minIndex];
+         var v2 := a[maxIndex];
+         if v1 > v2 then begin
+            a[minIndex] := v2;
+            a[maxIndex] := v1;
+         end;
+      end;
+      2 : begin
+         i := minIndex+1;
+         if a[minIndex] > a[i] then
+            Swap(a, minIndex, i);
+         if a[i] > a[maxIndex] then begin
+            Swap(a, i, maxIndex);
+            if a[minIndex] > a[i] then
+               Swap(a, minIndex, i);
+         end;
+      end;
+   else
+      if n <= 0 then Exit;
+      repeat
+         i := minIndex;
+         j := maxIndex;
+         p := ((i+j) shr 1);
+         repeat
+            var pivotValue : Int64 := a[p];
+            while a[i] < pivotValue do Inc(i);
+            while a[j] > pivotValue do Dec(j);
+            if i <= j then begin
+               if i <> j then begin
+                  var v1 := a[i];
+                  var v2 := a[j];
+                  a[i] := v2;
+                  a[j] := v1;
+               end;
+               if p = i then
+                  p := j
+               else if p = j then
+                  p := i;
+               Inc(i);
+               Dec(j);
+            end;
+         until i > j;
+         if minIndex < j then
+            QuickSortInt64(a, minIndex, j);
+         minIndex := i;
+      until i >= maxIndex;
+   end;
+end;
+
+// QuickSortString
+//
+procedure QuickSortString(a : PStringArray; minIndex, maxIndex : NativeInt);
+
+   procedure Swap(a : PStringArray; i1, i2 : NativeInt); inline;
+   begin
+      var buf := Pointer(a[i1]);
+      Pointer(a[i1]) := Pointer(a[i2]);
+      Pointer(a[i2]) := buf;
+   end;
+
+var
+   i, j, p, n : NativeInt;
+begin
+   n := maxIndex-minIndex;
+   case n of
+      1 : begin
+         if a[minIndex] > a[maxIndex] then
+            Swap(a, minIndex, maxIndex);
+      end;
+      2 : begin
+         i := minIndex+1;
+         if a[minIndex] > a[i] then
+            Swap(a, minIndex, i);
+         if a[i] > a[maxIndex] then begin
+            Swap(a, i, maxIndex);
+            if a[minIndex] > a[i] then
+               Swap(a, minIndex, i);
+         end;
+      end;
+   else
+      if n <= 0 then Exit;
+      repeat
+         i := minIndex;
+         j := maxIndex;
+         p := ((i+j) shr 1);
+         repeat
+            while a[i] < a[p] do Inc(i);
+            while a[j] > a[p] do Dec(j);
+            if i <= j then begin
+               if i <> j then
+                  Swap(a, i, j);
+               if p = i then
+                  p := j
+               else if p = j then
+                  p := i;
+               Inc(i);
+               Dec(j);
+            end;
+         until i > j;
+         if minIndex < j then
+            QuickSortString(a, minIndex, j);
+         minIndex := i;
+      until i >= maxIndex;
    end;
 end;
 
@@ -7062,7 +7344,8 @@ begin
             while CompareMethod(i, p)<0 do Inc(i);
             while CompareMethod(j, p)>0 do Dec(j);
             if i<=j then begin
-               SwapMethod(i, j);
+               if i <> j then
+                  SwapMethod(i, j);
                if p=i then
                   p:=j
                else if p=j then
@@ -7256,70 +7539,12 @@ end;
 // ------------------ TSimpleInt64List ------------------
 // ------------------
 
-// DoExchange
-//
-procedure TSimpleInt64List.DoExchange(index1, index2 : Integer);
-var
-   t : Int64;
-begin
-   t:=FItems[index1];
-   FItems[index1]:=FItems[index2];
-   FItems[index2]:=t;
-end;
-
-// QuickSort
-//
-procedure TSimpleInt64List.QuickSort(minIndex, maxIndex : Integer);
-var
-   i, j, p, n : Integer;
-begin
-   n:=maxIndex-minIndex;
-   case n of
-      1 : begin
-         if FItems[minIndex]>FItems[maxIndex] then
-            DoExchange(minIndex, maxIndex);
-      end;
-      2 : begin
-         i:=minIndex+1;
-         if FItems[minIndex]>FItems[i] then
-            DoExchange(minIndex, i);
-         if FItems[i]>FItems[maxIndex] then begin
-            DoExchange(i, maxIndex);
-            if FItems[minIndex]>FItems[i] then
-               DoExchange(minIndex, i);
-         end;
-      end;
-   else
-      if n<=0 then Exit;
-      repeat
-         i:=minIndex;
-         j:=maxIndex;
-         p:=((i+j) shr 1);
-         repeat
-            while FItems[i]<FItems[p] do Inc(i);
-            while Fitems[j]>FItems[p] do Dec(j);
-            if i<=j then begin
-               DoExchange(i, j);
-               if p=i then
-                  p:=j
-               else if p=j then
-                  p:=i;
-               Inc(i);
-               Dec(j);
-            end;
-         until i>j;
-         if minIndex<j then
-            QuickSort(minIndex, j);
-         minIndex:=i;
-      until i>=maxIndex;
-   end;
-end;
-
 // Sort
 //
 procedure TSimpleInt64List.Sort;
 begin
-   QuickSort(0, Count-1);
+   if Count > 1 then
+      QuickSortInt64(PInt64Array(FItems), 0, Count-1)
 end;
 
 // ------------------
@@ -7337,59 +7562,12 @@ begin
    FItems[index2]:=buf;
 end;
 
-// QuickSort
-//
-procedure TSimpleDoubleList.QuickSort(minIndex, maxIndex : Integer);
-var
-   i, j, p, n : Integer;
-begin
-   n := maxIndex - minIndex;
-   case n of
-      1 : begin
-         if FItems[minIndex] > FItems[maxIndex] then
-            Exchange(minIndex, maxIndex);
-      end;
-      2 : begin
-         i := minIndex+1;
-         if FItems[minIndex] > FItems[i] then
-            Exchange(minIndex, i);
-         if FItems[i] > FItems[maxIndex] then begin
-            Exchange(i, maxIndex);
-            if FItems[minIndex] > FItems[i] then
-               Exchange(minIndex, i);
-         end;
-      end;
-   else
-      repeat
-         i := minIndex;
-         j := maxIndex;
-         p := ((i+j) shr 1);
-         repeat
-            while FItems[i] < FItems[p] do Inc(i);
-            while FItems[j] > FItems[p] do Dec(j);
-            if i <= j then begin
-               Exchange(i, j);
-               if p = i then
-                  p := j
-               else if p = j then
-                  p := i;
-               Inc(i);
-               Dec(j);
-            end;
-         until i > j;
-         if minIndex < j then
-            QuickSort(minIndex, j);
-         minIndex := i;
-      until i >= maxIndex;
-   end;
-end;
-
 // Sort
 //
 procedure TSimpleDoubleList.Sort;
 begin
    if Count > 1 then
-      QuickSort(0, Count-1);
+      QuickSortDoublePrecision(PDoubleArray(FItems), 0, Count-1);
 end;
 
 // QuickSum
@@ -7873,6 +8051,17 @@ end;
 procedure SwapInt64(var a, b : Int64);
 var
    buf : Int64;
+begin
+   buf := a;
+   a := b;
+   b := buf;
+end;
+
+// SwapSingles
+//
+procedure SwapSingles(var a, b : Single); inline;
+var
+   buf : Single;
 begin
    buf := a;
    a := b;

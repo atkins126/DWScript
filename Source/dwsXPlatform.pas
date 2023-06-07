@@ -46,7 +46,8 @@ unit dwsXPlatform;
 interface
 
 uses
-   Classes, SysUtils, Types, Masks, SyncObjs, Variants, StrUtils,
+   System.Classes, System.SysUtils, System.Types, System.Masks,
+   System.SyncObjs, System.Variants, System.StrUtils,
    {$ifdef DELPHI_XE3_PLUS}
    DateUtils,
    {$endif}
@@ -58,7 +59,7 @@ uses
       {$ENDIF}
    {$ELSE}
       {$IFDEF WINDOWS}
-      Windows, Registry
+      Winapi.Windows, System.Win.Registry
       {$ENDIF}
       {$IFNDEF VER200}, IOUtils{$ENDIF}
       {$IFDEF UNIX}
@@ -91,6 +92,9 @@ type
    {$HINTS OFF}
    {$ifdef UNIX}
    TdwsCriticalSection = class (TCriticalSection);
+      public
+         function TryEnterOrTimeout(delayMSec : Integer) : Boolean;
+   end;
    {$else}
    TdwsCriticalSection = class
       private
@@ -105,6 +109,7 @@ type
          procedure Leave;
 
          function TryEnter : Boolean;
+         function TryEnterOrTimeout(delayMSec : Integer) : Boolean;
    end;
    {$endif}
 
@@ -368,6 +373,7 @@ function FileMove(const existing, new : TFileName) : Boolean;
 function FileDelete(const fileName : TFileName) : Boolean;
 function FileRename(const oldName, newName : TFileName) : Boolean;
 function FileSize(const name : TFileName) : Int64;
+function FileCreationTime(const name : TFileName) : TdwsDateTime; overload;
 function FileDateTime(const name : TFileName; lastAccess : Boolean = False) : TdwsDateTime; overload;
 function FileDateTime(hFile : THandle; lastAccess : Boolean = False) : TdwsDateTime; overload;
 procedure FileSetDateTime(hFile : THandle; const aDateTime : TdwsDateTime);
@@ -390,6 +396,7 @@ function DirectSet8087CW(newValue : Word) : Word; register;
 function DirectSetMXCSR(newValue : Word) : Word; register;
 
 function SwapBytes(v : Cardinal) : Cardinal;
+procedure SwapBytesBlock(src, dest : PByte; nb : Integer);
 procedure SwapInt64(src, dest : PInt64);
 
 function RDTSC : UInt64;
@@ -438,14 +445,34 @@ type
    TModuleVersion = record
       Major, Minor : Word;
       Release, Build : Word;
-      function AsString : String;
+      function GetAsString : String;
+      procedure SetAsString(const s : String);
+      property AsString : String read GetAsString write SetAsString;
    end;
+
+   TApplicationVersionOption = (
+      avoBitness     // if set, mention 32bit or 64bit after version number
+   );
+   TApplicationVersionOptions = set of TApplicationVersionOption;
 
 function GetModuleVersion(instance : THandle; var version : TModuleVersion) : Boolean;
 function GetApplicationVersion(var version : TModuleVersion) : Boolean;
-function ApplicationVersion : String;
+function ApplicationVersion(const options : TApplicationVersionOptions = [ avoBitness ]) : String;
 
-function Win64AVX2Supported : Boolean;
+type
+   TCPUFeature = (
+      cpuFeaturesRead,  // internal flag to indicate features were read
+      cpuSSE41,         // SSE4.1
+      cpuFMA,           // FMA3
+      cpuAVX,           // AVX
+      cpuAVX2           // AVX2
+   );
+   TCPUFeatures = set of TCPUFeature;
+
+function WIN64CPUFeatures : TCPUFeatures;
+function Win64SSE41Supported : Boolean; inline;
+function Win64FMASupported : Boolean; inline;
+function Win64AVX2Supported : Boolean; inline;
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -796,7 +823,7 @@ end;
 //
 function UnicodeStringReplace(const s, oldPattern, newPattern: String; flags: TReplaceFlags) : String;
 begin
-   Result := SysUtils.StringReplace(s, oldPattern, newPattern, flags);
+   Result := System.SysUtils.StringReplace(s, oldPattern, newPattern, flags);
 end;
 
 {$ifdef WINDOWS}
@@ -873,7 +900,7 @@ begin
    if n > 0 then begin
       {$ifdef WINDOWS}
       SetLength(result, n);
-      Windows.LCMapStringEx(nil, LCMAP_LOWERCASE or LCMAP_LINGUISTIC_CASING,
+      Winapi.Windows.LCMapStringEx(nil, LCMAP_LOWERCASE or LCMAP_LINGUISTIC_CASING,
                             PWideChar(Pointer(s)), n, PWideChar(Pointer(result)), n,
                             nil, nil, 0);
       {$else}
@@ -899,7 +926,7 @@ begin
    if n > 0 then begin
       {$ifdef WINDOWS}
       SetLength(result, n);
-      Windows.LCMapStringEx(nil, LCMAP_UPPERCASE or LCMAP_LINGUISTIC_CASING,
+      Winapi.Windows.LCMapStringEx(nil, LCMAP_UPPERCASE or LCMAP_LINGUISTIC_CASING,
                             PWideChar(Pointer(s)), n, PWideChar(Pointer(result)), n,
                             nil, nil, 0);
       {$else}
@@ -1032,7 +1059,7 @@ function InterlockedIncrement(var val : Integer) : Integer;
 {$ifndef WIN32_ASM}
 begin
    {$ifdef WINDOWS}
-   Result := Windows.InterlockedIncrement(val);
+   Result := Winapi.Windows.InterlockedIncrement(val);
    {$else}
    Result := TInterlocked.Increment(val);
    {$endif}
@@ -1051,7 +1078,7 @@ function InterlockedDecrement(var val : Integer) : Integer;
 {$ifndef WIN32_ASM}
 begin
    {$ifdef WINDOWS}
-   Result := Windows.InterlockedDecrement(val);
+   Result := Winapi.Windows.InterlockedDecrement(val);
    {$else}
    Result := TInterlocked.Decrement(val);
    {$endif}
@@ -1097,7 +1124,7 @@ begin
    Result := System.InterLockedExchange(target, val);
    {$else}
       {$ifdef WINDOWS}
-      Result := Windows.InterlockedExchangePointer(target, val);
+      Result := Winapi.Windows.InterlockedExchangePointer(target, val);
       {$else}
       Result := TInterlocked.Exchange(target, val);
       {$endif}
@@ -1121,7 +1148,7 @@ begin
       {$endif}
    {$else}
       {$ifdef WINDOWS}
-      Result := Windows.InterlockedCompareExchangePointer(destination, exchange, comparand);
+      Result := Winapi.Windows.InterlockedCompareExchangePointer(destination, exchange, comparand);
       {$else}
       Result := TInterlocked.CompareExchange(destination, exchange, comparand);
       {$endif}
@@ -1170,7 +1197,7 @@ end;
 procedure OutputDebugString(const msg : String);
 begin
    {$ifdef WINDOWS}
-   Windows.OutputDebugStringW(PWideChar(msg));
+   Winapi.Windows.OutputDebugStringW(PWideChar(msg));
    {$else}
    { TODO : Check for Linux debugger functionalities }
    {$endif}
@@ -1309,7 +1336,7 @@ begin
             CollectFilesMasked(fileName, masks, list, True, onProgress);
          end;
       until not FindNextFileW(searchRec.Handle, searchRec.Data);
-      Windows.FindClose(searchRec.Handle);
+      Winapi.Windows.FindClose(searchRec.Handle);
    end;
 end;
 {$else}
@@ -1427,7 +1454,7 @@ begin
             list.Add(fileName);
          end;
       until not FindNextFileW(searchRec.Handle, searchRec.Data);
-      Windows.FindClose(searchRec.Handle);
+      Winapi.Windows.FindClose(searchRec.Handle);
    end;
 end;
 {$else}
@@ -2226,7 +2253,7 @@ end;
 //
 function SetEndOfFile(hFile : THandle) : Boolean;
 begin
-   Result := Windows.SetEndOfFile(hFile);
+   Result := Winapi.Windows.SetEndOfFile(hFile);
 end;
 
 // FileCopy
@@ -2234,7 +2261,7 @@ end;
 function FileCopy(const existing, new : TFileName; failIfExists : Boolean) : Boolean;
 begin
    {$ifdef WINDOWS}
-   Result := Windows.CopyFileW(PWideChar(existing), PWideChar(new), failIfExists);
+   Result := Winapi.Windows.CopyFileW(PWideChar(existing), PWideChar(new), failIfExists);
    {$else}
    try
       IOUtils.TFile.Copy(existing, new, not failIfExists);
@@ -2250,7 +2277,7 @@ end;
 function FileMove(const existing, new : TFileName) : Boolean;
 begin
    {$ifdef WINDOWS}
-   Result := Windows.MoveFileW(PWideChar(existing), PWideChar(new));
+   Result := Winapi.Windows.MoveFileW(PWideChar(existing), PWideChar(new));
    {$else}
    try
       IOUtils.TFile.Move(existing, new);
@@ -2265,7 +2292,7 @@ end;
 //
 function FileDelete(const fileName : TFileName) : Boolean;
 begin
-   Result := SysUtils.DeleteFile(fileName);
+   Result := System.SysUtils.DeleteFile(fileName);
 end;
 
 // FileRename
@@ -2297,6 +2324,25 @@ begin
    finally
       SysUtils.FindClose(searchRec);
    end;
+end;
+{$endif}
+
+// FileCreationTime
+//
+function FileCreationTime(const name : TFileName) : TdwsDateTime; overload;
+{$ifdef WINDOWS}
+var
+   info : TWin32FileAttributeData;
+   buf : TdwsDateTime;
+begin
+   if GetFileAttributesExW(PWideChar(Pointer(name)), GetFileExInfoStandard, @info) then begin
+      buf.AsFileTime := info.ftCreationTime;
+   end else buf.Clear;
+   Result := buf;
+end;
+{$else}
+begin
+   Result.AsLocalDateTime := FileDateTime(name);
 end;
 {$endif}
 
@@ -2439,6 +2485,19 @@ begin
 {$endif}
 end;
 
+// SwapBytesBlock
+//
+procedure SwapBytesBlock(src, dest : PByte; nb : Integer);
+begin
+   Inc(dest, nb-1);
+   while nb > 0 do begin
+      dest^ := src^;
+      Inc(src);
+      Dec(dest);
+      Dec(nb);
+   end;
+end;
+
 // SwapInt64
 //
 procedure SwapInt64(src, dest : PInt64);
@@ -2500,7 +2559,7 @@ var
 begin
    len:=255;
    SetLength(Result, len);
-   Windows.GetUserNameW(PWideChar(Result), len);
+   Winapi.Windows.GetUserNameW(PWideChar(Result), len);
    SetLength(Result, len-1);
 end;
 {$else}
@@ -2542,17 +2601,32 @@ end;
 procedure InitializeWithDefaultFormatSettings(var fmt : TFormatSettings);
 begin
    {$ifdef DELPHI_XE_PLUS}
-   fmt:=SysUtils.FormatSettings;
+   fmt := System.SysUtils.FormatSettings;
    {$else}
-   fmt:=SysUtils.TFormatSettings((@CurrencyString{%H-})^);
+   fmt := System.SysUtils.TFormatSettings((@CurrencyString{%H-})^);
    {$endif}
 end;
 
-// AsString
+// GetAsString
 //
-function TModuleVersion.AsString : String;
+function TModuleVersion.GetAsString : String;
 begin
    Result := Format('%d.%d.%d.%d', [Major, Minor, Release, Build]);
+end;
+
+// SetAsString
+//
+procedure TModuleVersion.SetAsString(const s : String);
+var
+   parts : TStringDynArray;
+begin
+   Self := Default(TModuleVersion);
+   parts := SplitString(s, '.');
+   var len := Length(parts);
+   if len > 0 then major := StrToIntDef(parts[0], 0);
+   if len > 1 then minor := StrToIntDef(parts[1], 0);
+   if len > 2 then release := StrToIntDef(parts[2], 0);
+   if len > 3 then build := StrToIntDef(parts[3], 0);
 end;
 
 {$ifdef WINDOWS}
@@ -2623,72 +2697,100 @@ end;
 
 // ApplicationVersion
 //
-function ApplicationVersion : String;
+function ApplicationVersion(const options : TApplicationVersionOptions = [ avoBitness ]) : String;
 var
    version : TModuleVersion;
 begin
    {$ifdef WINDOWS}
       {$ifdef WIN64}
       if GetApplicationVersion(version) then
-         Result := version.AsString + ' 64bit'
-      else Result := '?.?.?.? 64bit';
+         Result := version.AsString
+      else Result := '?.?.?.?';
       {$else}
       if GetApplicationVersion(version) then
-         Result := version.AsString + ' 32bit'
-      else Result := '?.?.?.? 32bit';
+         Result := version.AsString
+      else Result := '?.?.?.?';
       {$endif}
    {$else}
       // No version information available under Linux
-      {$ifdef LINUX64}
-      Result := 'linux build 64bit';
-      {$else}
-      Result := 'linux build 32bit';
-      {$endif}
+      Result := 'linux build';
    {$endif}
+   {$ifdef CPUX64}
+   if avoBitness in options then
+      Result := Result + ' 64bit';
+   {$endif}
+   {$ifdef CPUX86}
+   if avoBitness in options then
+      Result := Result + ' 32bit';
+   {$endif}
+end;
+
+// Win64CPUFeatures
+//
+{$if Defined(WIN64_ASM)}
+function GetCPUID_ECX : Cardinal;
+asm
+   mov   r10, rbx
+   mov   eax, 1
+   cpuid
+   mov   eax, ecx
+   mov   rbx, r10
+end;
+
+function GetCPUID7_EBX : Cardinal;
+asm
+   mov   r10, rbx
+   mov   eax, 7
+   xor   ecx, ecx
+   cpuid
+   mov   eax, ebx
+   mov   rbx, r10
+end;
+
+var
+   vCPUFeatures : TCPUFeatures;
+function Win64CPUFeatures : TCPUFeatures;
+begin
+   if not (cpuFeaturesRead in vCPUFeatures) then begin
+      var ecx := GetCPUID_ECX;
+      if ((ecx shr 19) and 1) <> 0 then Include(vCPUFeatures, cpuSSE41);
+      if ((ecx shr 12) and 1) <> 0 then Include(vCPUFeatures, cpuFMA);
+      if ((ecx shr 28) and 1) <> 0 then begin
+         Include(vCPUFeatures, cpuAVX);
+         if (GetCPUID7_EBX shr 5) <> 0 then
+            Include(vCPUFeatures, cpuAVX2);
+      end;
+      Include(vCPUFeatures, cpuFeaturesRead);
+   end;
+   Result := vCPUFeatures;
+end;
+{$else}
+function Win64CPUFeatures : TCPUFeatures;
+begin
+   Result := [];
+end;
+{$endif}
+
+// Win64SSE41Supported
+//
+function Win64SSE41Supported : Boolean;
+begin
+   Result := cpuSSE41 in WIN64CPUFeatures;
+end;
+
+// Win64FMASupported
+//
+function Win64FMASupported : Boolean;
+begin
+   Result := cpuFMA in WIN64CPUFeatures;
 end;
 
 // Win64AVX2Supported
 //
-{$if Defined(WIN64_ASM)}
-function TestAVX2supported: boolean;
-asm
-   mov   r10, rbx
-   //Check CPUID.0
-   xor   eax, eax
-   cpuid //modifies EAX,EBX,ECX,EDX
-   cmp   al, 7 // do we have a CPUID leaf 7 ?
-   jge   @@leaf7
-
-   xor   eax, eax
-   jmp   @@exit
-
-@@leaf7:
-   mov   eax, 7h
-   xor   ecx, ecx
-   cpuid
-   bt    ebx, 5 //AVX2: CPUID.(EAX=07H, ECX=0H):EBX.AVX2[bit 5]=1
-   setc  al
-
-@@exit:
-   mov   rbx, r10
-end;
-var
-   vWin64AVX2Supported : ShortInt = 0;
 function Win64AVX2Supported : Boolean;
 begin
-   if vWin64AVX2Supported = 0 then begin
-      if TestAVX2supported then
-         vWin64AVX2Supported := 1
-      else vWin64AVX2Supported := -1;
-   end;
-   Result := (vWin64AVX2Supported = 1);
+   Result := cpuAVX2 in WIN64CPUFeatures;
 end;
-{$else}
-function Win64AVX2Supported : Boolean;
-begin
-   Result := False;
-end;
-{$endif}
 
 // ------------------
 // ------------------ TdwsCriticalSection ------------------
@@ -2731,6 +2833,27 @@ begin
 end;
 {$endif}
 
+// TryEnterOrTimeout
+//
+function TdwsCriticalSection.TryEnterOrTimeout(delayMSec : Integer) : Boolean;
+
+   function EnterWait : Boolean;
+   var
+      timeout : Int64;
+   begin
+      timeout := GetSystemMilliseconds + delayMSec;
+      repeat
+         Sleep(10);
+         Result := TryEnter;
+      until Result or (GetSystemMilliseconds > timeout);
+   end;
+
+begin
+   Result := TryEnter;
+   if not Result then
+      Result := EnterWait;
+end;
+
 // ------------------
 // ------------------ TPath ------------------
 // ------------------
@@ -2742,7 +2865,7 @@ class function TPath.GetTempPath : String;
 var
    tempPath : array [0..MAX_PATH] of WideChar; // Buf sizes are MAX_PATH+1
 begin
-   if Windows.GetTempPath(MAX_PATH, @tempPath[0])=0 then begin
+   if Winapi.Windows.GetTempPath(MAX_PATH, @tempPath[0])=0 then begin
       tempPath[1]:='.'; // Current directory
       tempPath[2]:=#0;
    end;
@@ -2760,11 +2883,11 @@ class function TPath.GetTempFileName : String;
 var
    tempPath, tempFileName : array [0..MAX_PATH] of WideChar; // Buf sizes are MAX_PATH+1
 begin
-   if Windows.GetTempPath(MAX_PATH, @tempPath[0])=0 then begin
+   if Winapi.Windows.GetTempPath(MAX_PATH, @tempPath[0])=0 then begin
       tempPath[1]:='.'; // Current directory
       tempPath[2]:=#0;
    end;
-   if Windows.GetTempFileNameW(@tempPath[0], 'DWS', 0, tempFileName)=0 then
+   if Winapi.Windows.GetTempFileNameW(@tempPath[0], 'DWS', 0, tempFileName)=0 then
       RaiseLastOSError; // should never happen
    Result:=tempFileName;
 {$ELSE}

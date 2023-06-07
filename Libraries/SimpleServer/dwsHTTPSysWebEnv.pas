@@ -23,9 +23,9 @@ unit dwsHTTPSysWebEnv;
 interface
 
 uses
-   Windows, Classes, SysUtils, StrUtils,
+   Winapi.Windows, System.Classes, System.SysUtils, System.StrUtils,
    SynCommons, SynWinSock,
-   dwsWebEnvironment, dwsUtils, dwsHTTPSysAPI, dwsWebServerHelpers,
+   dwsWebEnvironment, dwsWebEnvironmentTypes, dwsUtils, dwsHTTPSysAPI, dwsWebServerHelpers,
    dwsURLRewriter;
 
 type
@@ -88,6 +88,9 @@ type
          function ContentLength : Integer; override;
          function ContentData : RawByteString; override;
          function ContentType : RawByteString; override;
+
+         function URLBeginsWith(const aBegin : String) : Boolean; override;
+         function URLEquals(const anURL : String) : Boolean; override;
 
          property InContent : RawByteString read FInContent write FInContent;
          property InContentType : RawByteString read FInContentType write FInContentType;
@@ -482,6 +485,20 @@ end;
 function THttpSysWebRequest.ContentType : RawByteString;
 begin
    Result:=InContentType;
+end;
+
+// URLBeginsWith
+//
+function THttpSysWebRequest.URLBeginsWith(const aBegin : String) : Boolean;
+begin
+   Result := StrBeginsWith(FURL, aBegin);
+end;
+
+// URLEquals
+//
+function THttpSysWebRequest.URLEquals(const anURL : String) : Boolean;
+begin
+   Result := (FURL = anURL);
 end;
 
 end.

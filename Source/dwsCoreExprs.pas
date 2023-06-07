@@ -24,7 +24,7 @@ unit dwsCoreExprs;
 interface
 
 uses
-   Classes, SysUtils, Variants,
+   System.Classes, System.SysUtils, System.Variants,
    dwsUtils, dwsXPlatform, dwsUnicode,
    dwsDataContext, dwsCompilerContext, dwsExprList,
    dwsSymbols, dwsErrors, dwsStrings, dwsConvExprs,
@@ -418,6 +418,8 @@ type
          function EvalAsBoolean(exec : TdwsExecution) : Boolean; override;
          procedure EvalAsScriptObj(exec : TdwsExecution; var Result : IScriptObj); override;
          procedure EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray); override;
+
+         procedure Append(exec : TdwsExecution; const value : String);
 
          procedure GetDataPtr(exec : TdwsExecution; var result : IDataContext); override;
 
@@ -1083,6 +1085,10 @@ type
    // a += b (String var)
    TAppendStringVarExpr = class(TAssignExpr)
       function Token : TTokenType; override;
+      procedure EvalNoResult(exec : TdwsExecution); override;
+   end;
+   // a += b (String field)
+   TAppendStringFieldExpr = class(TAppendStringVarExpr)
       procedure EvalNoResult(exec : TdwsExecution); override;
    end;
 
@@ -3180,6 +3186,13 @@ end;
 procedure TFieldVarExpr.EvalAsScriptDynArray(exec : TdwsExecution; var result : IScriptDynArray);
 begin
    GetPIScriptObj(exec)^.EvalAsInterface(FieldSym.Offset, PIUnknown(@result)^);
+end;
+
+// Append
+//
+procedure TFieldVarExpr.Append(exec : TdwsExecution; const value : String);
+begin
+   GetPIScriptObj(exec)^.AppendString(FieldSym.Offset, value);
 end;
 
 // GetDataPtr
@@ -5942,6 +5955,11 @@ begin
       FLeft:=nil;
       FRight:=nil;
       Orphan(context);
+   end else if FLeft is TFieldVarExpr then begin
+      Result := TAppendStringFieldExpr.Create(context, FScriptPos, FLeft, FRight);
+      FLeft := nil;
+      FRight := nil;
+      Orphan(context);
    end;
 end;
 
@@ -6130,6 +6148,20 @@ end;
 function TAppendStringVarExpr.Token : TTokenType;
 begin
    Result := ttPLUS_ASSIGN;
+end;
+
+// ------------------
+// ------------------ TAppendStringFieldExpr ------------------
+// ------------------
+
+// EvalNoResult
+//
+procedure TAppendStringFieldExpr.EvalNoResult(exec : TdwsExecution);
+var
+   buf : String;
+begin
+   FRight.EvalAsString(exec, buf);
+   TFieldVarExpr(FLeft).Append(exec, buf);
 end;
 
 // ------------------
@@ -7465,7 +7497,9 @@ end;
 
 procedure TWhileExpr.EvalNoResult(exec : TdwsExecution);
 begin
-   while FCondExpr.EvalAsBoolean(exec) do begin
+   repeat
+      exec.DoStep(FCondExpr);
+      if not FCondExpr.EvalAsBoolean(exec) then Break;
       exec.DoStep(FLoopExpr);
       FLoopExpr.EvalNoResult(exec);
       if exec.Status<>esrNone then begin
@@ -7479,7 +7513,7 @@ begin
             esrExit : Exit;
          end;
       end;
-   end;
+   until False;
 end;
 
 // Optimize

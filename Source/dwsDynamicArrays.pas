@@ -24,7 +24,7 @@ unit dwsDynamicArrays;
 interface
 
 uses
-   Classes, SysUtils, System.Variants,
+   System.Classes, System.SysUtils, System.Types, System.Variants,
    dwsSymbols, dwsUtils, dwsDataContext, dwsJSON;
 
 type
@@ -194,6 +194,7 @@ type
          procedure NaturalSort;
 
          procedure AddStrings(sl : TStrings);
+         procedure AppendString(index : NativeInt; const str : String);
 
          function GetAsFloat(index : NativeInt) : Double;
          procedure SetAsFloat(index : NativeInt; const v : Double);
@@ -266,6 +267,7 @@ type
          procedure NaturalSort;
 
          procedure AddStrings(sl : TStrings);
+         procedure AppendString(index : NativeInt; const str : String);
 
          function AsPDouble(var nbElements, stride : NativeInt) : PDouble;
 
@@ -331,6 +333,7 @@ type
          procedure NaturalSort;
 
          procedure AddStrings(sl : TStrings);
+         procedure AppendString(index : NativeInt; const str : String);
 
          function GetAsFloat(index : NativeInt) : Double;
          procedure SetAsFloat(index : NativeInt; const v : Double);
@@ -397,6 +400,7 @@ type
          procedure NaturalSort;
 
          procedure AddStrings(sl : TStrings);
+         procedure AppendString(index : NativeInt; const str : String);
 
          function GetAsFloat(index : NativeInt) : Double;
          procedure SetAsFloat(index : NativeInt; const v : Double);
@@ -481,6 +485,7 @@ type
          procedure NaturalSort;
 
          procedure AddStrings(sl : TStrings);
+         procedure AppendString(index : NativeInt; const str : String);
 
          function GetAsFloat(index : NativeInt) : Double;
          procedure SetAsFloat(index : NativeInt; const v : Double);
@@ -1359,12 +1364,10 @@ end;
 // NaturalSort
 //
 procedure TScriptDynamicNativeIntegerArray.NaturalSort;
-var
-   qs : TQuickSort;
 begin
-   qs.CompareMethod := Self.Compare;
-   qs.SwapMethod := Self.Swap;
-   qs.Sort(0, FArrayLength-1);
+   if FArrayLength > 1 then
+      QuickSortInt64(PInt64Array(FData), 0, FArrayLength-1)
+
 end;
 
 // AddStrings
@@ -1372,6 +1375,13 @@ end;
 procedure TScriptDynamicNativeIntegerArray.AddStrings(sl : TStrings);
 begin
    DynamicArrayAddStrings(Self, sl);
+end;
+
+// AppendString
+//
+procedure TScriptDynamicNativeIntegerArray.AppendString(index : NativeInt; const str : String);
+begin
+   Assert(False);
 end;
 
 // GetAsFloat
@@ -1771,12 +1781,9 @@ end;
 // NaturalSort
 //
 procedure TScriptDynamicNativeFloatArray.NaturalSort;
-var
-   qs : TQuickSort;
 begin
-   qs.CompareMethod := Self.Compare;
-   qs.SwapMethod := Self.Swap;
-   qs.Sort(0, FArrayLength-1);
+   if FArrayLength > 1 then
+      QuickSortDoublePrecision(FData, 0, FArrayLength-1);
 end;
 
 // AddStrings
@@ -1784,6 +1791,13 @@ end;
 procedure TScriptDynamicNativeFloatArray.AddStrings(sl : TStrings);
 begin
    DynamicArrayAddStrings(Self, sl);
+end;
+
+// AppendString
+//
+procedure TScriptDynamicNativeFloatArray.AppendString(index : NativeInt; const str : String);
+begin
+   Assert(False);
 end;
 
 // AsPDouble
@@ -2070,7 +2084,7 @@ begin
          end;
       end else begin
          for i := fromIndex to FArrayLength-1 do begin
-            if (Length(p^) = n) and SysUtils.CompareMem(Pointer(p^), Pointer(item), n*SizeOf(Char)) then
+            if (Length(p^) = n) and System.SysUtils.CompareMem(Pointer(p^), Pointer(item), n*SizeOf(Char)) then
                Exit(i);
             Inc(p);
          end;
@@ -2156,12 +2170,9 @@ end;
 // NaturalSort
 //
 procedure TScriptDynamicNativeStringArray.NaturalSort;
-var
-   qs : TQuickSort;
 begin
-   qs.CompareMethod := Self.Compare;
-   qs.SwapMethod := Self.Swap;
-   qs.Sort(0, FArrayLength-1);
+   if FArrayLength > 1 then
+      QuickSortString(PStringArray(FData), 0, FArrayLength-1);
 end;
 
 // AddStrings
@@ -2174,6 +2185,13 @@ begin
    SetArrayLength(n + sl.Count);
    for i := 0 to sl.Count-1 do
       FData[i+n] := sl[i];
+end;
+
+// AppendString
+//
+procedure TScriptDynamicNativeStringArray.AppendString(index : NativeInt; const str : String);
+begin
+   FData[index] := FData[index] + str;
 end;
 
 // GetAsFloat
@@ -2557,6 +2575,13 @@ end;
 // AddStrings
 //
 procedure TScriptDynamicNativeBaseInterfaceArray.AddStrings(sl : TStrings);
+begin
+   Assert(False);
+end;
+
+// AppendString
+//
+procedure TScriptDynamicNativeBaseInterfaceArray.AppendString(index : NativeInt; const str : String);
 begin
    Assert(False);
 end;
@@ -3074,6 +3099,13 @@ end;
 procedure TScriptDynamicNativeBooleanArray.AddStrings(sl : TStrings);
 begin
    DynamicArrayAddStrings(Self, sl);
+end;
+
+// AppendString
+//
+procedure TScriptDynamicNativeBooleanArray.AppendString(index : NativeInt; const str : String);
+begin
+   Assert(False);
 end;
 
 // GetAsFloat

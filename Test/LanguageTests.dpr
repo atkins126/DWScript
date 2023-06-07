@@ -79,7 +79,13 @@ uses
   UdwsCSSPackTests in 'UdwsCSSPackTests.pas',
   UdwsIniFileTests in 'UdwsIniFileTests.pas',
   UdwsCustomDataTests in 'UdwsCustomDataTests.pas',
-  UdwsTimeSeriesTests in 'UdwsTimeSeriesTests.pas';
+  UdwsTimeSeriesTests in 'UdwsTimeSeriesTests.pas',
+  UAutoFormatTests in 'UAutoFormatTests.pas',
+  dwsCodeDOM in '..\Source\SourceUtils\dwsCodeDOM.pas',
+  dwsCodeDOMNodes in '..\Source\SourceUtils\dwsCodeDOMNodes.pas',
+  dwsCodeDOMParser in '..\Source\SourceUtils\dwsCodeDOMParser.pas',
+  dwsCodeDOMPascalParser in '..\Source\SourceUtils\dwsCodeDOMPascalParser.pas',
+  UCodeDOMTests in 'UCodeDOMTests.pas';
 
 {$R *.res}
 

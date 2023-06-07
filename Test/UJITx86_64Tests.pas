@@ -76,6 +76,8 @@ type
          procedure vbroadcast;
          procedure v_op_pd;
          procedure v_op_ps;
+         procedure _movups_ptr_reg;
+         procedure _movups_ptr_reg_reg;
          procedure _vmovdqu;
          procedure _vmovapd;
          procedure _vmovupd_ptr_indexed;
@@ -226,7 +228,7 @@ begin
    for reg := gprRAX to gprR15 do begin
       for xmm := xmm0 to xmm15 do begin
          FStream._cvtsi2sd(xmm, reg);
-         FStream._xmm_reg_dword_ptr_reg(xmm_cvtsi2sd, xmm, reg, $12);
+         FStream._xmm_reg_qword_ptr_reg(xmm_cvtsi2sd, xmm, reg, $12);
          FStream._cvtsd2si(reg, xmm);
          FStream._cvttsd2si(reg, xmm);
          CheckEquals( 'cvtsi2sd xmm' + IntToStr(Ord(xmm)) + ', ' + cgpRegister64Name[reg] + #13#10
@@ -1728,12 +1730,12 @@ end;
 //
 procedure TJITx86_64Tests.v_op_ps;
 begin
-   FStream._v_op_ps(xmm_xorpd, ymm0, ymm1, ymm2);
-   FStream._v_op_ps(xmm_addpd, ymm8, ymm9, ymm10);
-   FStream._v_op_ps(xmm_mulpd, ymm15, ymm0, ymm9);
-   FStream._v_op_ps(xmm_minpd, ymm1, ymm12, ymm5);
-   FStream._v_op_ps(xmm_maxpd, ymm8, ymm0, ymm12);
-   FStream._v_op_ps(xmm_subpd, ymm2, ymm11, ymm13);
+   FStream._v_op_ps(xmm_xorps, ymm0, ymm1, ymm2);
+   FStream._v_op_ps(xmm_addps, ymm8, ymm9, ymm10);
+   FStream._v_op_ps(xmm_mulps, ymm15, ymm0, ymm9);
+   FStream._v_op_ps(xmm_minps, ymm1, ymm12, ymm5);
+   FStream._v_op_ps(xmm_maxps, ymm8, ymm0, ymm12);
+   FStream._v_op_ps(xmm_subps, ymm2, ymm11, ymm13);
    CheckEquals(  ''
                + 'vxorps ymm0, ymm1, ymm2'#13#10
                + 'vaddps ymm8, ymm9, ymm10'#13#10
@@ -1741,6 +1743,47 @@ begin
                + 'vminps ymm1, ymm12, ymm5'#13#10
                + 'vmaxps ymm8, ymm0, ymm12'#13#10
                + 'vsubps ymm2, ymm11, ymm13'#13#10
+               , DisasmStream);
+end;
+
+// _movups_ptr_reg
+//
+procedure TJITx86_64Tests._movups_ptr_reg;
+begin
+   FStream._movups_reg_ptr_reg(xmm0, gprRAX, 0);
+   FStream._movups_reg_ptr_reg(xmm8, gprRBP, 1);
+   FStream._movups_reg_ptr_reg(xmm1, gprRDX, 123456);
+   FStream._movups_ptr_reg_reg(gprRAX, 0, xmm0);
+   FStream._movups_ptr_reg_reg(gprRBP, 1, xmm8);
+   FStream._movups_ptr_reg_reg(gprRDX, 123456, xmm1);
+   FStream._movups_ptr_reg_reg(gprRBP, -$d0, xmm9);
+   CheckEquals(  ''
+               + 'movups xmm0, xmmword ptr [rax]'#13#10
+               + 'movups xmm8, xmmword ptr [rbp+01h]'#13#10
+               + 'movups xmm1, xmmword ptr [rdx+0001E240h]'#13#10
+               + 'movups xmmword ptr [rax], xmm0'#13#10
+               + 'movups xmmword ptr [rbp+01h], xmm8'#13#10
+               + 'movups xmmword ptr [rdx+0001E240h], xmm1'#13#10
+               + 'movups xmmword ptr [rbp-000000D0h], xmm9'#13#10
+               , DisasmStream);
+
+end;
+
+// _movups_ptr_reg_reg
+//
+procedure TJITx86_64Tests._movups_ptr_reg_reg;
+begin
+   // xmm8+ actually works, but Bea does not disassemble them correctly
+
+   FStream._movups_reg_ptr_reg_reg(xmm0, gprRAX, gprRAX);
+//   FStream._movups_reg_ptr_reg_reg(xmm8, gprR9, gprRCX);
+   FStream._movups_reg_ptr_reg_reg(xmm1, gprRDX, gprR8);
+//   FStream._movups_reg_ptr_reg_reg(xmm9, gprR10, gprR11);
+   CheckEquals(  ''
+               + 'movups xmm0, xmmword ptr [rax+rax]'#13#10
+//               + 'movups xmm8, xmmword ptr [r9+rcx]'#13#10
+               + 'movups xmm1, xmmword ptr [rdx+r8]'#13#10
+//               + 'movups xmm9, xmmword ptr [r10+r11]'#13#10
                , DisasmStream);
 end;
 

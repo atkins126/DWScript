@@ -20,7 +20,7 @@ unit dwsJSON;
 interface
 
 uses
-   Classes, SysUtils, Math, Variants,
+   System.Classes, System.SysUtils, System.Math, System.Variants,
    dwsUtils, dwsXPlatform, dwsXXHash, dwsUnicode;
 
 type
@@ -175,8 +175,9 @@ type
 
       protected
          function GetOwner : TdwsJSONValue; inline;
-         procedure SetOwner(aOwner : TdwsJSONValue); inline;
+         procedure SetOwner(aOwner : TdwsJSONValue); virtual;
          procedure ClearOwner; inline;
+         function HasInOwners(obj : TdwsJSONValue) : Boolean;
 
          property FOwner : TdwsJSONValue read GetOwner write SetOwner;
 
@@ -319,6 +320,8 @@ type
          FCount : Integer;
 
       protected
+         procedure SetOwner(aOwner : TdwsJSONValue); override;
+
          procedure Grow;
          procedure SetCapacity(newCapacity : Integer);
          function IndexOfHashedName(hash : Cardinal; const name : UnicodeString) : Integer; inline;
@@ -382,6 +385,8 @@ type
          FCount : Integer;
 
       protected
+         procedure SetOwner(aOwner : TdwsJSONValue); override;
+
          procedure Grow;
          procedure SetCapacity(newCapacity : Integer);
          procedure DetachChild(child : TdwsJSONValue); override;
@@ -418,6 +423,8 @@ type
          function AddValue : TdwsJSONImmediate;
          procedure AddNull;
          procedure Delete(index : Integer);
+
+         procedure AddFrom(other : TdwsJSONArray);
 
          procedure Sort(const aCompareMethod : TdwsJSONValueCompareMethod);
          procedure Swap(index1, index2 : Integer);
@@ -493,8 +500,8 @@ type
       constructor Create(idx, count : Integer);
    end;
 
-procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; const str : UnicodeString); overload; inline;
-procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; p : PWideChar; size : Integer); overload;
+procedure WriteJavaScriptString(destStream : TStream; const str : UnicodeString); overload; inline;
+procedure WriteJavaScriptString(destStream : TStream; p : PWideChar; size : Integer); overload;
 
 function JSONStringify(const f : Double) : String;
 
@@ -972,7 +979,7 @@ end;
 
 // WriteJavaScriptString
 //
-procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; const str : UnicodeString);
+procedure WriteJavaScriptString(destStream : TStream; const str : UnicodeString);
 begin
    WriteJavaScriptString(destStream, PWideChar(Pointer(str)), Length(str));
 end;
@@ -988,7 +995,7 @@ end;
 
 // WriteJavaScriptString
 //
-procedure WriteJavaScriptString(destStream : TWriteOnlyBlockStream; p : PWideChar; size : Integer); overload;
+procedure WriteJavaScriptString(destStream : TStream; p : PWideChar; size : Integer); overload;
 
    function WriteUTF16(p : PWideChar; c : Integer) : PWideChar;
    const
@@ -1077,6 +1084,18 @@ end;
 procedure TdwsJSONValue.ClearOwner;
 begin
    FRawOwner:=(FRawOwner and $7);
+end;
+
+// HasInOwners
+//
+function TdwsJSONValue.HasInOwners(obj : TdwsJSONValue) : Boolean;
+begin
+   var o := Self;
+   repeat
+      if o = obj then Exit(True);
+      o := o.GetOwner;
+   until o = nil;
+   Result := False;
 end;
 
 // Destroy
@@ -1466,7 +1485,7 @@ function TdwsJSONValue.GetIsNaN : Boolean;
 begin
    Result:=not (    Assigned(Self)
                 and (ValueType=jvtNumber)
-                and Math.IsNan(Value.AsNumber));
+                and System.Math.IsNan(Value.AsNumber));
 end;
 
 // GetAsInteger
@@ -2048,13 +2067,20 @@ end;
 // IndexOfValue
 //
 function TdwsJSONObject.IndexOfValue(const aValue : TdwsJSONValue) : Integer;
-var
-   i : Integer;
 begin
-   for i:=0 to FCount-1 do
-      if FItems^[i].Value=aValue then
+   for var i := 0 to FCount-1 do
+      if FItems^[i].Value = aValue then
          Exit(i);
-   Result:=-1;
+   Result := -1;
+end;
+
+// SetOwner
+//
+procedure TdwsJSONObject.SetOwner(aOwner : TdwsJSONValue);
+begin
+   if aOwner.HasInOwners(Self) then
+      RaiseJSONException('JSON circular reference');
+   inherited SetOwner(aOwner);
 end;
 
 // ------------------
@@ -2271,6 +2297,22 @@ begin
    DeleteIndex(index);
 end;
 
+// AddFrom
+//
+procedure TdwsJSONArray.AddFrom(other : TdwsJSONArray);
+begin
+   if other.FCount = 0 then Exit;
+
+   for var i := 0 to other.FCount-1 do begin
+      var elem := other.FElements^[i];
+      if FCount=FCapacity then Grow;
+      FElements^[FCount] := other.FElements^[i];
+      elem.FOwner := Self;
+      Inc(FCount);
+   end;
+   other.FCount := 0;
+end;
+
 // Sort
 //
 type
@@ -2444,7 +2486,21 @@ end;
 //
 procedure TdwsJSONArray.DoExtend(other : TdwsJSONValue);
 begin
-   RaiseJSONException('Cannot extend arrays (yet)');
+   if other.ClassType<>TdwsJSONArray then
+      RaiseJSONException('Can only extend Array with Array');
+   var otherArr := TdwsJSONArray(other);
+   for var i := 0 to otherArr.FCount-1 do
+      Add(otherArr.FElements^[i].Clone);
+
+end;
+
+// SetOwner
+//
+procedure TdwsJSONArray.SetOwner(aOwner : TdwsJSONValue);
+begin
+   if aOwner.HasInOwners(Self) then
+      RaiseJSONException('JSON circular reference');
+   inherited SetOwner(aOwner);
 end;
 
 // ------------------
@@ -3250,7 +3306,7 @@ procedure TdwsJSONBeautifiedWriter.WriteIndents;
 var
    target, current : Integer;
 begin
-   target := FSpaces * FSpacesPerIndent * FSpaceCharacter.Length;
+   target := FSpaces * FSpaceCharacter.Length;
    current := Length(FIndents);
    if current <> target then begin
       if current > target then

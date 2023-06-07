@@ -21,7 +21,7 @@ unit dwsArrayElementContext;
 interface
 
 uses
-   Classes, SysUtils,
+   System.Classes, System.SysUtils,
    dwsSymbols, dwsDataContext, dwsErrors, dwsStrings, dwsUtils;
 
 type
@@ -30,7 +30,8 @@ type
          FArray : IScriptDynArray;
          FIndex : NativeInt;
          FElementSize : Integer;
-         FBase : NativeInt;
+         FBaseElement : NativeInt;
+         FDataOffset : Integer;
 
       protected
          function GetSelf : TObject;
@@ -81,6 +82,7 @@ type
          function SameData(const other : IDataContext) : Boolean; overload;
 
          function  IncInteger(addr : NativeInt; delta : Int64) : Int64;
+         procedure AppendString(addr : NativeInt; const str : String);
 
          function  HashCode(size : NativeInt) : Cardinal;
 
@@ -117,7 +119,8 @@ begin
    FArray := anArray;
    FIndex := anIndex;
    FElementSize := anArray.ElementSize;
-   FBase := FIndex*FElementSize;
+   FBaseElement := FIndex*FElementSize;
+   FDataOffset := 0;
 end;
 
 // CreateEmpty
@@ -164,10 +167,11 @@ end;
 //
 function TArrayElementDataContext.ComputeAddr(addr : NativeInt) : NativeInt;
 begin
+   Inc(addr, FDataOffset);
    Assert(Cardinal(addr) < Cardinal(FElementSize));
    if FIndex >= FArray.ArrayLength then
       raise EScriptError.CreateFmt(RTE_ArrayUpperBoundExceeded, [FIndex]);
-   Result := FBase + addr;
+   Result := FBaseElement + addr;
 end;
 
 // GetAsVariant
@@ -277,8 +281,7 @@ begin
    Assert(offset < FElementSize);
 
    dc := TArrayElementDataContext.Create(FArray, FIndex);
-   Inc(dc.FBase, offset);
-   Dec(dc.FElementSize, offset);
+   Inc(dc.FDataOffset, Self.FDataOffset + offset);
    Result := dc;
 end;
 
@@ -429,6 +432,14 @@ begin
    addr := ComputeAddr(addr);
    Result := FArray.AsInteger[addr] + delta;
    FArray.AsInteger[addr] := Result;
+end;
+
+// AppendString
+//
+procedure TArrayElementDataContext.AppendString(addr : NativeInt; const str : String);
+begin
+   addr := ComputeAddr(addr);
+   FArray.AppendString(addr, str);
 end;
 
 // HashCode

@@ -19,7 +19,7 @@ unit dwsJIT;
 interface
 
 uses
-   Classes, SysUtils,
+   System.Classes, System.SysUtils,
    dwsExprs, dwsExprList, dwsSymbols, dwsErrors, dwsUtils, dwsCoreExprs, dwsXPlatform,
    dwsRelExprs, dwsMagicExprs, dwsJITFixups, dwsScriptSource, dwsJITx86Intrinsics;
 
@@ -889,7 +889,7 @@ var
    assignExpr : TAssignExpr;
    composite : TCompositeTypeSymbol;
 begin
-   if expr is TBlockExprBase then begin
+   if (expr <> nil) and (expr.Taxonomy = ebtBlockExprBase) then begin
       block:=TBlockExprBase(expr);
       for i:=0 to block.SubExprCount-1 do begin
          subExpr:=block.SubExpr[i];
