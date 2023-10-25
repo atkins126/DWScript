@@ -168,6 +168,8 @@ type
          procedure InternalClassDynamic;
 
          procedure InterfaceTest;
+
+         procedure PropertyVisibilityPromotion;
    end;
 
    EDelphiException = class (Exception)
@@ -3006,6 +3008,57 @@ begin
       prog := nil;
    end;
 end;
+
+// PropertyVisibilityPromotion
+//
+procedure TdwsUnitTests.PropertyVisibilityPromotion;
+var
+   prog : IdwsProgram;
+begin
+   var propUnit := TdwsUnit.Create(nil);
+   try
+      propUnit.UnitName := 'Promotion';
+      var cls1 := propUnit.Classes.Add;
+         cls1.Name := 'TParent';
+      var fld1 := cls1.Fields.Add;
+         fld1.Name := 'Field';
+         fld1.DataType := 'Integer';
+      var prop1 := cls1.Properties.Add;
+         prop1.Visibility := cvProtected;
+         prop1.Name := 'MyProp';
+         prop1.DataType := 'Integer';
+         prop1.WriteAccess := 'Field';
+      var cls2 := propUnit.Classes.Add;
+         cls2.Name := 'TSub';
+         cls2.Ancestor := 'TParent';
+      var prop2 := cls2.Properties.Add;
+         prop2.Name := 'MyProp';
+         prop2.Visibility := cvPublic;
+
+      propUnit.Script := FCompiler;
+
+      try
+         prog := FCompiler.Compile('var c := new TParent; c.MyProp := 123;');
+         CheckEquals(
+            'Syntax Error: Member symbol "MyProp" is not visible from this scope [line: 1, column: 25]'#13#10,
+            prog.Msgs.AsInfo,
+            'TParent.MyProp write access'
+         );
+
+         prog := FCompiler.Compile('var c := new TSub; c.MyProp := 123;');
+         CheckEquals(
+            '',
+            prog.Msgs.AsInfo,
+            'TSub.MyProp write access'
+         );
+      finally
+         prog := nil;
+      end;
+   finally
+      propUnit.Free;
+   end;
+end;
+
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
