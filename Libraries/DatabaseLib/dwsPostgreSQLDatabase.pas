@@ -22,7 +22,7 @@ interface
 
 uses
    System.Classes, System.SysUtils, System.Types,
-   dwsUtils, dwsDatabase, dwsXPlatform, dwsDataContext, dwsSymbols, dwsExprs, dwsLibpq;
+   dwsUtils, dwsDatabase, dwsDataContext, dwsSymbols, dwsExprs, dwsLibpq;
 
 type
 
@@ -149,7 +149,7 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsRandom, dwsXXHash;
+uses dwsRandom, dwsXXHash, dwsXPlatform;
 
 const
    cInitialFetch = 'FETCH 2 in ';
@@ -223,7 +223,7 @@ begin
             end else begin
                params.Types[i] := INT8OID;
                SetLength(params.Values[i], 8);
-               SwapInt64(@p.VInt64, Pointer(params.Values[i]));
+               SwapBytesInt64(@p.VInt64, Pointer(params.Values[i]));
                params.Lengths[i] := 8;
                params.Formats[i] := 1;
             end;
@@ -231,7 +231,7 @@ begin
          varDouble : begin
             params.Types[i] := FLOAT8OID;
             SetLength(params.Values[i], SizeOf(Double));
-            SwapInt64(Pointer(@p.VDouble), Pointer(params.Values[i]));
+            SwapBytesInt64(Pointer(@p.VDouble), Pointer(params.Values[i]));
             params.Lengths[i] := SizeOf(Double);
             params.Formats[i] := 1;
          end;
@@ -242,7 +242,7 @@ begin
                params.Values[i] := vBooleanFalse;
                params.Lengths[i] := 0;
             end else begin
-               params.Values[i] := UTF8Encode(String(p.VUString));
+               params.Values[i] := StringToUTF8(String(p.VUString));
                params.Lengths[i] := Length(params.Values[i]);
             end;
             params.Formats[i] := 1;
@@ -274,7 +274,7 @@ begin
             // this leaves only 2 for microseconds, so a precision of 10 microseconds
             dt := Round(p.VDate*86400e5)*10 - Round(cPostgresEpochDeltaDays * 86400e6);
             SetLength(params.Values[i], SizeOf(Int64));
-            SwapInt64(@dt, Pointer(params.Values[i]));
+            SwapBytesInt64(@dt, Pointer(params.Values[i]));
             params.Lengths[i] := SizeOf(Int64);
             params.Formats[i] := 1;
          end;
@@ -321,7 +321,7 @@ begin
    try
       if Length(parameters) = 0 then
          raise EDWSDataBase.Create('Missing PostgreSQL connection info');
-      FConn := vLibpq.PQconnectdb(PAnsiChar(UTF8Encode(parameters[0])));
+      FConn := vLibpq.PQconnectdb(PAnsiChar(StringToUTF8(parameters[0])));
    except
       RefCount := 0;
       raise;
@@ -477,7 +477,7 @@ var
 var
    res : PGresult;
 begin
-   query := UTF8Encode(sql);
+   query := StringToUTF8(sql);
 
    if parameters <> nil then
       res := PQExecParams
@@ -580,7 +580,7 @@ begin
    inherited Create(db);
 
    try
-      FSQL := UTF8Encode(sql);
+      FSQL := StringToUTF8(sql);
 
       if (aMode = dsmForceCursor) or (FDB.InTransaction and (aMode = dsmAutomatic)) then begin
          // within transactions, we use cursors by default for selects
@@ -929,7 +929,7 @@ begin
          Result := Integer(SwapBytes(PCardinal(p)^));
       end;
       INT8OID :
-         SwapInt64(p, @Result);
+         SwapBytesInt64(p, @Result);
       BOOLOID :
          Result := Ord(PByte(p)^ <> 0);
    else
@@ -957,13 +957,13 @@ begin
          Result := s;
       end;
       FLOAT8OID : begin
-         SwapInt64(p, @Result);
+         SwapBytesInt64(p, @Result);
       end;
       NUMERICOID : begin
          Result := PostgreSQLNumericToFloat(p);
       end;
       TIMESTAMPOID : begin
-         SwapInt64(p, @dt);
+         SwapBytesInt64(p, @dt);
          Result := dt / 86400e6 + cPostgresEpochDeltaDays;
       end;
    else

@@ -37,11 +37,9 @@ unit dwsHTTPSysServer;
 interface
 
 uses
-   Windows,
-   ActiveX,
-   SysUtils,
-   Classes,
-   SynWinSock, Registry,
+   Winapi.Windows, Winapi.ActiveX,
+   System.SysUtils, System.Classes,
+   SynWinSock,
    dwsHTTPSysAPI, dwsUtils, dwsXPlatform,
    dwsWebEnvironment, dwsHttpSysWebEnv, dwsWebServerHelpers,
    dwsHTTPSysServerEvents, dwsURLRewriter;
@@ -821,7 +819,7 @@ end;
 //
 procedure THttpApi2Server.SetServerName(const val : String);
 begin
-   FServerName := UTF8Encode(val);
+   FServerName := StringToUTF8(val);
    FLogFieldsData.ServerNameLength := Length(FServerName);
    FLogFieldsData.ServerName := Pointer(FServerName);
 end;
@@ -916,7 +914,7 @@ end;
 procedure THttpApi2Server.SetServiceName(const val : String);
 begin
    FServiceNameW := val;
-   FServiceNameA := UTF8Encode(val);
+   FServiceNameA := StringToUTF8(val);
    FLogFieldsData.ServerNameLength := Length(FServiceNameA);
    FLogFieldsData.ServerName := Pointer(FServiceNameA);
 end;
@@ -1172,6 +1170,10 @@ begin
                end;
             except
                // handle any exception raised during process: show must go on!
+               on E : EHttpApiServer do begin
+                  if not HttpThreadExceptionIntercepted(E) then
+                     raise;
+               end;
                on E : Exception do begin
                   if HttpThreadExceptionIntercepted(E) then
                      SendError(request, response, 500, 'Internal Server Error')

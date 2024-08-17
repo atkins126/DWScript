@@ -16,20 +16,20 @@
 {**********************************************************************}
 unit dwsCryptoUtils;
 
-interface
+{$I dws.inc}
 
-uses
-   SysUtils, SynCrypto, SynZip,
-   dwsRipeMD160, dwsCryptProtect, dwsSHA3, dwsUtils, dwsXPlatform,
-   dwsSHA512;
+interface
 
 type
    THashFunction = function (const data : RawByteString) : RawByteString;
 
 function HMAC(const key, msg : RawByteString; h : THashFunction; blockSize : Integer) : String;
 
+function ConstantTimeCompareMem(p1, p2 : PByte; nbBytes : Integer) : Boolean;
+
 function HashSHA3_256(const data : RawByteString) : RawByteString;
 function HashSHA256(const data : RawByteString) : RawByteString;
+function HashSHA256_P(p : Pointer; sizeBytes : Integer) : RawByteString;
 function HashSHA512(const data : RawByteString) : RawByteString;
 function HashRIPEMD160(const data : RawByteString) : RawByteString;
 
@@ -40,6 +40,7 @@ function HashSHA1(const data : RawByteString) : RawByteString;
 
 function HashMD5(const data : RawByteString) : RawByteString;
 function HashCRC32(const data : RawByteString) : RawByteString;
+function HashCRC32Num(const data : RawByteString) : UInt32;
 
 // authenticated encryption, key hashing, PKCS7 padding
 function AES_SHA3_CTR(const data, key : RawByteString; encrypt : Boolean) : RawByteString;
@@ -55,6 +56,13 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
+uses
+   System.SysUtils, System.ZLib, System.Hash,
+   SynCrypto,
+   dwsUtils, dwsXPlatform, dwsSHA3, dwsRipeMD160, dwsSHA512;
+
+// HMAC
+//
 function HMAC(const key, msg : RawByteString; h : THashFunction; blockSize : Integer) : String;
 var
    n : Integer;
@@ -84,14 +92,43 @@ begin
    Result := BinToHex(h(oPad+h(iPad+msg)));
 end;
 
-function HashSHA256(const data : RawByteString) : RawByteString;
+// ConstantTimeCompareMem
+//
+function ConstantTimeCompareMem(p1, p2 : PByte; nbBytes : Integer) : Boolean;
+begin
+   var r : UInt64 := 0;
+   while nbBytes >= 8 do begin
+      r := r or (PUInt64(p1)^ xor PUInt64(p2)^);
+      Inc(p1, 8);
+      Inc(p2, 8);
+      Dec(nbBytes, 8);
+   end;
+   while nbBytes > 0 do begin
+      r := r or (p1^ xor p2^);
+      Inc(p1);
+      Inc(p2);
+      Dec(nbBytes);
+   end;
+   Result := (r = 0);
+end;
+
+// HashSHA256_P
+//
+function HashSHA256_P(p : Pointer; sizeBytes : Integer) : RawByteString;
 var
    SHA : TSHA256;
    digest : TSHA256Digest;
 begin
-   SHA.Full(Pointer(data), Length(data), digest);
+   SHA.Full(p, sizeBytes, digest);
    SetLength(Result, SizeOf(digest));
    System.Move(digest, Result[1], SizeOf(digest));
+end;
+
+// HashSHA256
+//
+function HashSHA256(const data : RawByteString) : RawByteString;
+begin
+   Result := HashSHA256_P(Pointer(data), Length(data));
 end;
 
 // HashSHA512
@@ -112,7 +149,7 @@ function HashMD5(const data : RawByteString) : RawByteString;
 var
    digest : TMD5Digest;
 begin
-   digest:=MD5Buf(Pointer(data)^, Length(data));
+   digest := MD5Buf(Pointer(data)^, Length(data));
    SetLength(Result, SizeOf(digest));
    System.Move(digest, Result[1], SizeOf(digest));
 end;
@@ -171,7 +208,16 @@ end;
 function HashCRC32(const data : RawByteString) : RawByteString;
 begin
    SetLength(Result, 4);
-   PCardinal(Result)^:=CRC32string(data);
+   if data <> '' then
+      PUInt32(Result)^ := HashCRC32Num(data)
+   else PUInt32(Result)^ := 0;
+end;
+
+// HashCRC32Num
+//
+function HashCRC32Num(const data : RawByteString) : UInt32;
+begin
+   Result := System.ZLib.crc32(0, Pointer(data), Length(data));
 end;
 
 function AES_SHA3_CTR(const data, key : RawByteString; encrypt : Boolean) : RawByteString;
@@ -197,7 +243,7 @@ begin
       dataBuf := Copy(data, 1, n);
       dataHash := HashSHA3_256_Digest(key + dataBuf);
 
-      if not CompareMem(@dataHash, @PByte(data)[n], SizeOf(dataHash)) then Exit;
+      if not ConstantTimeCompareMem(@dataHash, @PByte(data)[n], SizeOf(dataHash)) then Exit;
 
    end;
 

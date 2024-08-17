@@ -63,6 +63,9 @@
    {$IF CompilerVersion>=35.0}
       {$DEFINE DELPHI_ALEXANDRIA_PLUS}
    {$IFEND}
+   {$IF CompilerVersion>=36.0}
+      {$DEFINE DELPHI_ATHENS_PLUS}
+   {$IFEND}
 {$ELSE}
    {$mode delphi}
    {$DEFINE PUREPASCAL}
@@ -96,3 +99,8 @@
    {$DEFINE WIN64}
 {$IFEND}
 
+{$IFOPT R+}
+   {$DEFINE RANGEON}
+{$ELSE}
+   {$UNDEF RANGEON}
+{$ENDIF}

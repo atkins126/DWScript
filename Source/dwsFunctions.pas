@@ -25,9 +25,8 @@ interface
 
 uses
    System.Classes, System.SysUtils,
-   dwsXPlatform, dwsUtils, dwsErrors, dwsCompilerContext, dwsUnicode,
-   dwsExprs, dwsSymbols, dwsStrings, dwsTokenizer, dwsScriptSource,
-   dwsOperators, dwsUnitSymbols;
+   dwsXPlatform, dwsUtils, dwsErrors, dwsCompilerContext, dwsExprs,
+   dwsSymbols, dwsScriptSource, dwsOperators, dwsUnitSymbols;
 
 type
 
@@ -136,7 +135,7 @@ type
 
    TInternalUnit = class(TObject, IdwsUnit, IdwsUnitTableFactory)
       private
-         FDependencies : TStringList;
+         FDependencies : TFastCompareTextList;
          FSymbolsRegistrationProcs : array of TSymbolsRegistrationProc;
          FOperatorsRegistrationProcs : array of TOperatorsRegistrationProc;
          FRegisteredInternalFunctions : TList;
@@ -154,6 +153,7 @@ type
          procedure BeforeAdditionTo(dwscript : TObject);
          function GetSelf : TObject;
          function GetUnitName : String;
+         function SameUnitName(const aName : String) : Boolean;
          function GetDeprecatedMessage : String;
 
          procedure InitUnitTable(systemTable : TSystemSymbolTable; unitSyms : TUnitMainSymbols;
@@ -185,7 +185,7 @@ type
 
    TSourceUnit = class(TInterfacedObject, IdwsUnit, IdwsUnitTableFactory)
       private
-         FDependencies : TStringList;
+         FDependencies : TFastCompareTextList;
          FSymbol : TUnitMainSymbol;
 
       protected
@@ -198,6 +198,7 @@ type
 
          procedure BeforeAdditionTo(dwscript : TObject);
          function GetUnitName : String;
+         function  SameUnitName(const aName : String) : Boolean;
          function GetUnitTable(systemTable : TSystemSymbolTable; unitSyms : TUnitMainSymbols;
                                operators : TOperators; rootTable : TSymbolTable) : TUnitSymbolTable;
          function GetDependencies : TStringList;
@@ -229,7 +230,7 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsCompilerUtils, dwsDataContext;
+uses dwsCompilerUtils, dwsDataContext, dwsStrings;
 
 var
    vInternalUnit : TInternalUnit;
@@ -323,6 +324,7 @@ type
    TRegisteredInternalFunction = record
       InternalFunctionClass : TInternalFunctionClass;
       FuncName, HelperName : String;
+      HelperHashCode : Cardinal;
       FuncParams : TParamArray;
       FuncType : String;
       DeprecatedMsg : String;
@@ -351,7 +353,13 @@ begin
    rif.FuncParams:=ConvertFuncParams(funcParams);
    rif.FuncType:=funcType;
    rif.DeprecatedMsg := deprecatedMsg;
-   UnifyAssignString(helperName, rif.HelperName);
+   if helperName <> '' then begin
+      UnifyAssignString(helperName, rif.HelperName);
+      rif.HelperHashCode := SimpleStringCaseInsensitiveHash(helperName);
+   end else begin
+      rif.HelperName := '';
+      rif.HelperHashCode := 0;
+   end;
 
    dwsInternalUnit.AddInternalFunction(rif);
 end;
@@ -673,7 +681,7 @@ end;
 //
 constructor TInternalUnit.Create;
 begin
-   FDependencies := TStringList.Create;
+   FDependencies := TFastCompareTextList.Create;
    FRegisteredInternalFunctions:=TList.Create;
    FStaticSymbols:=True;
    FCriticalSection:=TdwsCriticalSection.Create;
@@ -775,6 +783,13 @@ begin
    Result:=SYS_INTERNAL;
 end;
 
+// SameUnitName
+//
+function TInternalUnit.SameUnitName(const aName : String) : Boolean;
+begin
+   Result := UnicodeSameText(SYS_INTERNAL, aName);
+end;
+
 // GetDeprecatedMessage
 //
 function TInternalUnit.GetDeprecatedMessage : String;
@@ -817,7 +832,7 @@ begin
    for i:=0 to FRegisteredInternalFunctions.Count-1 do begin
       p:=PRegisteredInternalFunction(FRegisteredInternalFunctions[i]);
       if p.HelperName<>'' then
-         hash.Add(p.HelperName);
+         hash.AddHashed(p.HelperName, p.HelperHashCode);
    end;
 end;
 
@@ -914,12 +929,12 @@ constructor TSourceUnit.Create(const unitName : String; rootTable : TSymbolTable
                                unitSyms : TUnitMainSymbols);
 var
    ums : TUnitMainSymbol;
-   ust : TUnitSymbolTable;
 begin
    inherited Create;
 
-   FDependencies := TStringList.Create;
-   ust:=TUnitSymbolTable.Create(nil, rootTable.AddrGenerator);
+   FDependencies := TFastCompareTextList.Create;
+
+   var ust := TUnitSymbolTable.Create(nil, rootTable.AddrGenerator);
    FSymbol:=TUnitMainSymbol.Create(unitName, ust, unitSyms);
    ust.UnitMainSymbol:=FSymbol;
 
@@ -953,6 +968,13 @@ end;
 function TSourceUnit.GetUnitName : String;
 begin
    Result:=Symbol.Name;
+end;
+
+// SameUnitName
+//
+function TSourceUnit.SameUnitName(const aName : String) : Boolean;
+begin
+   Result := UnicodeSameText(Symbol.Name, aName);
 end;
 
 // GetUnitTable

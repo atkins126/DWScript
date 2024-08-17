@@ -24,10 +24,9 @@ unit dwsConvExprs;
 interface
 
 uses
-   System.Variants, System.SysUtils,
-   dwsUtils, dwsDataContext, dwsStack, dwsXPlatform, dwsErrors, dwsStrings,
-   dwsExprs, dwsExprList, dwsConstExprs, dwsSymbols, dwsUnitSymbols,
-   dwsScriptSource, dwsCompilerContext;
+   System.SysUtils,
+   dwsUtils, dwsDataContext, dwsStack, dwsExprs, dwsExprList,
+   dwsConstExprs, dwsSymbols, dwsScriptSource, dwsCompilerContext;
 
 type
 
@@ -227,7 +226,7 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsCoreExprs, dwsConnectorSymbols, dwsDynamicArrays;
+uses dwsCoreExprs, dwsConnectorSymbols, dwsDynamicArrays, dwsErrors, dwsStrings;
 
 // ------------------
 // ------------------ TConvExpr ------------------
@@ -278,13 +277,14 @@ begin
 
    if expr.ClassType = TArrayConstantExpr then begin
 
-      arrayConst:=TArrayConstantExpr(expr);
-      if toTyp is TDynamicArraySymbol then begin
+      arrayConst := TArrayConstantExpr(expr);
+      var toTypClass := toTyp.ClassType;
+      if toTypClass = TDynamicArraySymbol then begin
          if    (toTyp.Typ.IsOfType(expr.Typ.Typ))
             or ((arrayConst.ElementCount=0) and (arrayConst.Typ.Typ.IsOfType(context.TypVariant)))  then
             Result:=TConvArrayConstantToDynamicExpr.Create(context, scriptPos, arrayConst,
                                                            TDynamicArraySymbol(toTyp))
-      end else if toTyp is TSetOfSymbol then begin
+      end else if toTypClass = TSetOfSymbol then begin
          if arrayConst.ElementCount=0 then begin
             Result:=TConstExpr.Create(cNullPos, toTyp);
             expr.Free;
@@ -549,10 +549,8 @@ var
    end;
 
    procedure ConvDirectly;
-   var
-      i : Integer;
    begin
-      for i := 0 to arr.ElementCount-1 do
+      for var i := 0 to arr.ElementCount-1 do
          result.SetFromExpr(i, exec, arr.Elements[i]);
    end;
 

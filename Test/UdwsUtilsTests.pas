@@ -17,7 +17,8 @@ unit UdwsUtilsTests;
 
 interface
 
-uses Classes, SysUtils, Math, Variants, Types, Graphics,
+uses
+   System.Classes, System.SysUtils, System.Variants, System.Types,
    dwsXPlatformTests, dwsUtils,
    dwsXPlatform, dwsTokenStore, dwsCryptoXPlatform,
    dwsEncodingLibModule, dwsGlobalVars, dwsEncoding, dwsDataContext,
@@ -98,6 +99,7 @@ type
          procedure NameObjectHashTest;
          procedure NameObjectHashStressTest;
          procedure SimpleHashTest;
+         procedure SimpleStringCaseInsensitiveHashTest;
 
          procedure ObjectListTest;
 
@@ -121,6 +123,10 @@ type
          procedure URLRewriter;
 
          procedure TryStrToDoubleTest;
+
+         procedure StrReplaceCharTest;
+
+         procedure IsValidUTF8Test;
    end;
 
 // ------------------------------------------------------------------
@@ -131,7 +137,9 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsRandom;
+uses
+   System.Math,
+   dwsRandom;
 
 var
    vGlobals : TGlobalVars;
@@ -962,13 +970,13 @@ end;
 //
 procedure TdwsUtilsTests.IntToHexTest;
 begin
-   CheckEquals(SysUtils.IntToHex(Int64(0), -1), Int64ToHex(0, -1));
-   CheckEquals(SysUtils.IntToHex(Int64(0), 16), Int64ToHex(0, 20));
-   CheckEquals(SysUtils.IntToHex(Int64(-1), 1), Int64ToHex(-1, 1));
-   CheckEquals(SysUtils.IntToHex(Int64(0), 3), Int64ToHex(0, 3));
-   CheckEquals(SysUtils.IntToHex(Int64(12345), 3), Int64ToHex(12345, 3));
-   CheckEquals(SysUtils.IntToHex(Int64(12345), 6), Int64ToHex(12345, 6));
-   CheckEquals(SysUtils.IntToHex($123456789, 6), Int64ToHex($123456789, 6));
+   CheckEquals(System.SysUtils.IntToHex(Int64(0), -1), Int64ToHex(0, -1));
+   CheckEquals(System.SysUtils.IntToHex(Int64(0), 16), Int64ToHex(0, 20));
+   CheckEquals(System.SysUtils.IntToHex(Int64(-1), 1), Int64ToHex(-1, 1));
+   CheckEquals(System.SysUtils.IntToHex(Int64(0), 3), Int64ToHex(0, 3));
+   CheckEquals(System.SysUtils.IntToHex(Int64(12345), 3), Int64ToHex(12345, 3));
+   CheckEquals(System.SysUtils.IntToHex(Int64(12345), 6), Int64ToHex(12345, 6));
+   CheckEquals(System.SysUtils.IntToHex($123456789, 6), Int64ToHex($123456789, 6));
 end;
 
 // Int32ToStr
@@ -1493,6 +1501,18 @@ begin
    RunSieve(TSimpleIntegerHash3.Create);
 end;
 
+// SimpleStringCaseInsensitiveHashTest
+//
+procedure TdwsUtilsTests.SimpleStringCaseInsensitiveHashTest;
+begin
+   CheckEquals(SimpleStringHash(''), SimpleStringCaseInsensitiveHash(''), 'Empty');
+   CheckEquals(SimpleStringCaseInsensitiveHash('hello'), SimpleStringCaseInsensitiveHash('Hello'), 'hello');
+   CheckEquals(SimpleStringCaseInsensitiveHash('hello'), SimpleStringCaseInsensitiveHash('hellO'), 'Hello');
+   CheckEquals(SimpleStringCaseInsensitiveHash('noël'), SimpleStringCaseInsensitiveHash('noëL'), 'noël');
+   CheckEquals(SimpleStringCaseInsensitiveHash('noël'), SimpleStringCaseInsensitiveHash('NoëL'), 'NoëL');
+   CheckEquals(SimpleStringCaseInsensitiveHash('@az['), SimpleStringCaseInsensitiveHash('@AZ['), '@AZ[');
+end;
+
 // ObjectListTest
 //
 procedure TdwsUtilsTests.ObjectListTest;
@@ -1843,10 +1863,16 @@ end;
 //
 procedure TdwsUtilsTests.SwapPrimitives;
 begin
+   var a32, b32 : UInt32;
+   a32 := $01020304;
+   b32 := 0;
+   SwapBytesInt32(@a32, @b32);
+   CheckEquals($04030201, b32, 'SwapInt32');
+
    var a64, b64 : Int64;
    a64 := $0102030405060708;
    b64 := a64 shl 1;
-   SwapInt64(@a64, @b64);
+   SwapBytesInt64(@a64, @b64);
    CheckEquals($0807060504030201, b64, 'SwapInt64');
 end;
 
@@ -2138,7 +2164,7 @@ procedure TdwsUtilsTests.TryStrToDoubleTest;
       if TryStrToDouble(PChar(s), v) then begin
          for i := 0 to High(buf) do
             buf[i] := PByteArray(@v)[High(buf)-i];
-         bv := SysUtils.UpperCase(BinToHex(buf, SizeOf(v)));
+         bv := System.SysUtils.UpperCase(BinToHex(buf, SizeOf(v)));
          if bv <> expected  then
             Check(False, Format('expected %s but got %s for "%s"',
                                 [ expected, bv, s ]))
@@ -2227,6 +2253,59 @@ begin
       TryStrToDouble(PChar(s), v);
       CheckEquals(s, FloatToStr(v), 'Pi x ' + IntToStr(i));
    end;
+end;
+
+// StrReplaceCharTest
+//
+procedure TdwsUtilsTests.StrReplaceCharTest;
+begin
+   CheckEquals('', StrReplaceChar('', '.', ','), 'empty');
+   CheckEquals('a', StrReplaceChar('a', '.', ','), 'a');
+   CheckEquals(',', StrReplaceChar('.', '.', ','), '.');
+   CheckEquals('a,', StrReplaceChar('a.', '.', ','), 'a.');
+   CheckEquals(',b', StrReplaceChar('.b', '.', ','), '.b');
+end;
+
+// IsValidUTF8Test
+//
+procedure TdwsUtilsTests.IsValidUTF8Test;
+
+   function WrapIsValidUTF8(const s : String) : Boolean;
+   begin
+      Result := IsValidUTF8(ScriptStringToRawByteString(s));
+   end;
+
+begin
+   // Valid UTF-8 strings
+   Check(WrapIsValidUTF8('Hello, World!'), 'Simple ASCII string');
+   Check(IsValidUTF8(UTF8Encode('π€©πΆβ¨')), 'String with multi-byte characters');
+   Check(IsValidUTF8(nil, 0), 'Empty string 1');
+   Check(WrapIsValidUTF8(''), 'Empty string 2');
+
+   // Malformed UTF-8 strings
+   CheckFalse(WrapIsValidUTF8('Hello' + #$00C0#$0020'World'), 'Malformed sequence in the middle');
+   CheckFalse(WrapIsValidUTF8(#$0080'abc'), 'Malformed sequence at the start');
+   CheckFalse(WrapIsValidUTF8('abc'#$80), 'Malformed sequence at the end');
+   CheckFalse(WrapIsValidUTF8(#$F8#$88#$80#$80#$80), 'Malformed sequence with overlong encoding');
+   CheckFalse(WrapIsValidUTF8(#$C0#$C0), 'Two malformed sequences');
+   CheckFalse(WrapIsValidUTF8(#$00E0#$0080), 'Malformed sequence with missing continuation bytes 1a');
+   CheckFalse(WrapIsValidUTF8(#$00E0#$0080'b'), 'Malformed sequence with missing continuation bytes 1b');
+   CheckFalse(WrapIsValidUTF8(#$00E0'cd'), 'Malformed sequence with missing continuation bytes 1c');
+   CheckFalse(WrapIsValidUTF8(#$00F0#$0080#$0080), 'Malformed sequence with missing continuation bytes 2a');
+   CheckFalse(WrapIsValidUTF8(#$00F0#$0080#$0080'b'), 'Malformed sequence with missing continuation bytes 2b');
+   CheckFalse(WrapIsValidUTF8(#$00F0#$0080'cd'), 'Malformed sequence with missing continuation bytes 2c');
+   CheckFalse(WrapIsValidUTF8(#$00F0'def'), 'Malformed sequence with missing continuation bytes 2d');
+   CheckFalse(WrapIsValidUTF8(#$00C0#$0080#$0080), 'Malformed sequence with overlong encoding 1');
+   CheckFalse(WrapIsValidUTF8(#$00E0#$0080#$0080#$0080), 'Malformed sequence with overlong encoding 2');
+   CheckFalse(WrapIsValidUTF8(#$00F0#$0080#$0080#$0080#$0080), 'Malformed sequence with overlong encoding 3');
+   CheckFalse(WrapIsValidUTF8(#$00F8#$0088#$0080#$0080#$0080#$00AF), 'Malformed sequence with overlong encoding 4');
+   CheckFalse(WrapIsValidUTF8(#$00FC#$0084#$0080#$0080#$0080#$0080#$00AF), 'Malformed sequence with overlong encoding 5');
+
+   // Edge cases
+   Check(WrapIsValidUTF8(#$007F), 'Single byte character (ASCII)');
+   Check(WrapIsValidUTF8(#$00DF#$00BF), 'Two byte character');
+   Check(WrapIsValidUTF8(#$00EF#$00BF#$00BD), 'Three byte character');
+   Check(WrapIsValidUTF8(#$00F4#$008F#$00BF#$00BF), 'Four byte character');
 end;
 
 // ------------------------------------------------------------------

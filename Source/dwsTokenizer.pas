@@ -24,8 +24,8 @@ unit dwsTokenizer;
 interface
 
 uses
-  SysUtils, Classes, TypInfo,
-  dwsTokenTypes, dwsScriptSource, dwsErrors, dwsStrings, dwsXPlatform, dwsUtils, dwsXXHash
+  System.SysUtils, System.Classes, System.TypInfo,
+  dwsTokenTypes, dwsScriptSource, dwsErrors, dwsUtils
   {$ifdef FPC},lazutf8{$endif};
 
 type
@@ -54,8 +54,9 @@ type
       function LastChar : Char;
       function ToStr : String; overload; inline;
       procedure ToStr(var result : String); overload;
-      procedure AppendMultiToStr(var result : String);
       procedure AppendToStr(var result : String);
+      procedure AppendMultiToStr(var result : String);
+      procedure AppendTripleToStr(var result : String; msgs : TdwsCompileMessageList; const scriptPos : TScriptPos);
       procedure ToUpperStr(var result : String); overload;
       function UpperFirstChar : Char;
       function UpperMatchLen(const str : String) : Boolean;
@@ -63,6 +64,7 @@ type
       procedure RaiseInvalidIntegerConstant;
       function BinToInt64 : Int64;
       function HexToInt64 : Int64;
+      procedure RemoveUnderscoresFromBuffer;
       function ToInt64 : Int64;
       function ToFloat : Double;
       function ToType : TTokenType;
@@ -99,6 +101,7 @@ type
       private
          FOwnedTransitions : TTightList;
          FTransitions : TTransitionArray;
+         FName : String;
 
       public
          destructor Destroy; override;
@@ -115,7 +118,8 @@ type
       caClear,
       caName, caNameEscaped,
       caBin, caHex, caInteger, caFloat,
-      caChar, caCharHex, caString, caMultiLineString,
+      caChar, caCharHex,
+      caString, caMultiLineString, caStringTriple,
       caSwitch,
       caDotDot, caAmp, caAmpAmp,
       caEndOfText
@@ -141,12 +145,18 @@ type
      constructor Create(actn : TConvertAction);
    end;
 
+   TErrorTransitionLocation = (
+      etlocCurrentPosition, // tokenizer position where error was detected
+      etlocStartPosition    // start of token
+   );
+
    TErrorTransition = class(TTransition)
       private
          ErrorMessage : String;
+         ErrorLocation : TErrorTransitionLocation;
 
       public
-         constructor Create(const msg : String);
+         constructor Create(const msg : String; errLocation : TErrorTransitionLocation = etlocCurrentPosition);
    end;
 
    TCheckTransition = class(TTransition);
@@ -172,7 +182,7 @@ type
          FCaseSensitive : TTokenizerCaseSensitivity;
 
       protected
-         function CreateState : TState;
+         function CreateState(const stateName : String = '') : TState;
          function StartState : TState; virtual; abstract;
 
       public
@@ -190,13 +200,13 @@ type
    end;
 
    TTokenizerSourceInfo = record
+      FHotPos : TScriptPos;
+      FCurPos : TScriptPos;
+      FPosPtr : PChar;
       FPathName : TFileName;
       FLocation : TFileName;
       FText : String;
       FDefaultPos : TScriptPos;
-      FHotPos : TScriptPos;
-      FCurPos : TScriptPos;
-      FPosPtr : PChar;
    end;
    PTokenizerSourceInfo = ^TTokenizerSourceInfo;
 
@@ -212,22 +222,26 @@ type
    TTokenizer = class
       private
          FTokenBuf : TTokenBuffer;
-         FNextToken : TToken;
-         FRules : TTokenizerRules;
+         FOnBeforeAction : TTokenizerActionEvent;
          FStartState : TState;
-         FToken : TToken;
          FSource : TTokenizerSourceInfo;
+
+         FOnEndSourceFile : TTokenizerEndSourceFileEvent;
+
+         FToken : TToken;
+         FNextToken : TToken;
+
+         FRules : TTokenizerRules;
+         FTokenPool : TToken;
+
          FSwitchHandler : TSwitchHandler;
          FSwitchProcessor : TSwitchHandler;
+
+         FSourceStack : array of TTokenizerSourceInfo;
+
          FMsgs : TdwsCompileMessageList;
          FConditionalDefines : IAutoStrings;
          FConditionalDepth : TSimpleStack<TTokenizerConditionalInfo>;
-
-         FTokenPool : TToken;
-
-         FSourceStack : array of TTokenizerSourceInfo;
-         FOnEndSourceFile : TTokenizerEndSourceFileEvent;
-         FOnBeforeAction : TTokenizerActionEvent;
 
          procedure AllocateToken;
          procedure ReleaseToken;
@@ -305,6 +319,8 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
+uses dwsXPlatform, dwsStrings;
+
 const
    cFormatSettings : TFormatSettings = ( DecimalSeparator : {%H-}'.' );
 
@@ -317,12 +333,14 @@ end;
 
 // AppendChar
 //
+{$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
 procedure TTokenBuffer.AppendChar(c : Char);
 begin
-   if Len>=Capacity then Grow;
-   Buffer[Len]:=c;
+   if Len >= Capacity then Grow;
+   Buffer[Len] := c;
    Inc(Len);
 end;
+{$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
 
 // Grow
 //
@@ -463,6 +481,104 @@ begin
    SetLength(result, k);
 end;
 
+// AppendTripleToStr
+//
+procedure TTokenBuffer.AppendTripleToStr(
+   var result : String; msgs : TdwsCompileMessageList;
+   const scriptPos : TScriptPos
+);
+var
+   temp : String;
+begin
+   result := '';
+   AppendToStr(temp);
+   // triple quoted string should
+   // - start with apos (dedup) + newline
+   // - end with newline + (optional indent) + 2x apos
+   // - mid line should have same indent as what's before the last apos
+   var n := Length(temp);
+   if    (n < 5)
+      or (temp[1] <> '''')
+      or (not CharInSet(temp[2], [ #13, #10 ]))
+      or (temp[n] <> '''')
+      or (temp[n-1] <> '''') then begin
+      msgs.AddCompilerError(scriptPos, TOK_TripleAposStringError);
+      Exit;
+   end;
+
+   Dec(n);
+   var lastIndentOffset := n;
+   repeat
+      Dec(n);
+      case temp[n] of
+         ' ', #9 :   // indent whitespace
+            lastIndentOffset := n;
+         #10 : begin
+            if temp[n-1] = #13 then
+               Dec(n);
+            Break;
+         end;
+         #13 : Break;
+      else
+         msgs.AddCompilerError(scriptPos, TOK_TripleAposStringIndentError);
+         Exit;
+      end;
+   until False; // we are guarded by the check for starting apos
+
+   var pIndentPatternStart := PChar(@temp[lastIndentOffset]);
+   var pIndentPatternLength := Length(temp) - lastIndentOffset - 1;
+
+   SetLength(result, n);
+   var pSrc := PChar(@temp[2]);
+   var pSrcTail := PChar(@temp[n]);
+   var pDest := PChar(result);
+   var firstLine := True;
+   var column : Integer := 0;
+   while UIntPtr(pSrc) < UIntPtr(pSrcTail) do begin
+      case pSrc^ of
+         #13 : begin
+            if not firstLine then begin
+               pDest^ := pSrc^;
+               Inc(pDest);
+            end;
+            Inc(pSrc);
+            if pSrc^ = #10 then begin
+               if not firstLine then begin
+                  pDest^ := pSrc^;
+                  Inc(pDest);
+               end;
+               Inc(pSrc);
+            end;
+            firstLine := False;
+            column := 0;
+         end;
+         #10 : begin
+            if not firstLine then begin
+               pDest^ := pSrc^;
+               Inc(pDest);
+            end;
+            Inc(pSrc);
+            firstLine := False;
+            column := 0;
+         end;
+      else
+         if column < pIndentPatternLength then begin
+            if pSrc^ <> pIndentPatternStart[column] then begin
+               msgs.AddCompilerError(scriptPos, TOK_TripleAposStringIndentError);
+               Exit;
+            end;
+            Inc(column);
+            Inc(pSrc);
+         end else begin
+            pDest^ := pSrc^;
+            Inc(pSrc);
+            Inc(pDest);
+         end;
+      end;
+   end;
+   SetLength(Result, (UIntPtr(pDest) - UIntPtr(result)) div SizeOf(Char));
+end;
+
 // ToUpperStr
 //
 procedure TTokenBuffer.ToUpperStr(var result : String);
@@ -556,12 +672,32 @@ begin
    end;
 end;
 
+// RemoveUnderscoresFromBuffer
+//
+procedure TTokenBuffer.RemoveUnderscoresFromBuffer;
+begin
+   var pSrc := PChar(@Buffer[0]);
+   var pDest := pSrc;
+   for var i := 0 to Len-1 do begin
+      if pSrc^ = '_' then begin
+         Dec(Len);
+      end else begin
+         if pSrc <> pDest then
+            pDest^ := pSrc^;
+         Inc(pDest);
+      end;
+      Inc(pSrc);
+   end;
+end;
+
 // ToInt64
 //
 function TTokenBuffer.ToInt64 : Int64;
 
    function ComplexToInt64(var buffer : TTokenBuffer) : Int64;
    begin
+      if Len > 1 then
+         RemoveUnderscoresFromBuffer;
       Result := StrToInt64(buffer.ToStr);
    end;
 
@@ -589,6 +725,9 @@ end;
 //
 function TTokenBuffer.ToFloat : Double;
 begin
+   if Len > 1 then
+      RemoveUnderscoresFromBuffer;
+
    AppendChar(#0);
    if not TryStrToDouble(PChar(@Buffer[0]), Result, cFormatSettings) then
       raise EConvertError.Create('');
@@ -751,7 +890,7 @@ const
       ttOBJECT, ttOF, ttOLD, ttON, ttOPERATOR, ttOR, ttOVERLOAD, ttOVERRIDE,
       ttPARTIAL, ttPROCEDURE, ttPROPERTY, ttPASCAL, ttPROGRAM,
       ttPRIVATE, ttPROTECTED, ttPUBLIC, ttPUBLISHED,
-      ttRECORD, ttREAD, ttRAISE, ttREINTRODUCE, ttREFERENCE, ttREGISTER,
+      ttRAISE, ttRECORD, ttREAD, ttREADONLY, ttREINTRODUCE, ttREFERENCE, ttREGISTER,
       ttREPEAT, ttREQUIRE, ttRESOURCESTRING,
       ttSAFECALL, ttSAR, ttSEALED, ttSET, ttSHL, ttSHR, ttSTATIC, ttSTDCALL, ttSTRICT,
       ttTHEN, ttTO, ttTRUE, ttTRY, ttTYPE,
@@ -796,45 +935,42 @@ end;
 // UpperMatchLen
 //
 function TTokenBuffer.UpperMatchLen(const str : String) : Boolean;
-var
-   i : Integer;
-   p : PChar;
-   ch : Char;
 begin
-   p:=PChar(Pointer(str));
-   for i:=1 to Len-1 do begin
-      ch:=Buffer[i];
+   var p := PChar(Pointer(str));
+   for var i := 1 to Len-1 do begin
+      var ch := Buffer[i];
       case ch of
-         'a'..'z' : if Char(Word(ch) xor $0020)<>p[i] then Exit(False);
+         'a'..'z' : if Char(Word(ch) xor $0020) <> p[i] then Exit(False);
       else
-         if ch<>p[i] then Exit(False);
+         if ch <> p[i] then Exit(False);
       end;
    end;
-   Result:=True;
+   Result := True;
 end;
 
 // ToAlphaType
 //
+{$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
 function TTokenBuffer.ToAlphaType : TTokenType;
 var
-   ch : Char;
-   i : Integer;
-   lookups : PTokenAlphaLookups;
+   lookups : Pointer;
 begin
    if (Len<2) or (Len>14) then Exit(ttNAME);
-   ch:=Buffer[0];
+   var ch := Buffer[0];
    case ch of
-      'a'..'x' : lookups:=@vAlphaToTokenType[Len][Char(Word(ch) xor $0020)];
-      'A'..'X' : lookups:=@vAlphaToTokenType[Len][ch];
+      'a'..'x' : lookups := @vAlphaToTokenType[Len][Char(Word(ch) xor $0020)];
+      'A'..'X' : lookups := @vAlphaToTokenType[Len][ch];
    else
       Exit(ttNAME);
    end;
-   for i:=0 to High(lookups^) do begin
-      if UpperMatchLen(lookups^[i].Alpha) then
-         Exit(lookups^[i].Token);
+   lookups := PPointer(lookups)^;
+   for var i := 0 to High(TTokenAlphaLookups(lookups)) do begin
+      if UpperMatchLen(TTokenAlphaLookups(lookups)[i].Alpha) then
+         Exit(TTokenAlphaLookups(lookups)[i].Token);
    end;
-   Result:=ttNAME;
+   Result := ttNAME;
 end;
+{$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
 
 // MatchLen
 //
@@ -1014,11 +1150,12 @@ end;
 // ------------------ TErrorTransition ------------------
 // ------------------
 
-constructor TErrorTransition.Create(const msg : String);
+constructor TErrorTransition.Create(const msg : String; errLocation : TErrorTransitionLocation = etlocCurrentPosition);
 begin
    inherited Create(nil, [], caNone);
    IsError := True;
    ErrorMessage := msg;
+   ErrorLocation := errLocation;
 end;
 
 // ------------------
@@ -1466,15 +1603,16 @@ procedure TTokenizer.ConsumeToken;
    // don't trigger error for EOF
    procedure DoErrorTransition(trns : TErrorTransition; ch : Char);
    begin
-      if trns.ErrorMessage <> '' then begin
-         case ch of
-            #0 :
-               FMsgs.AddCompilerError(CurrentPos, trns.ErrorMessage);
-            #1..#31 :
-               FMsgs.AddCompilerStopFmt(CurrentPos, '%s (found #%d)', [trns.ErrorMessage, Ord(ch)]);
-         else
-            FMsgs.AddCompilerStopFmt(CurrentPos, '%s (found "%s")', [trns.ErrorMessage, ch])
-         end;
+      if trns.ErrorMessage = '' then Exit;
+      if trns.ErrorLocation = etlocStartPosition then
+         FMsgs.AddCompilerStop(FToken.FScriptPos, trns.ErrorMessage)
+      else case ch of
+         #0 :
+            FMsgs.AddCompilerStop(CurrentPos, trns.ErrorMessage);
+         #1..#31 :
+            FMsgs.AddCompilerStopFmt(CurrentPos, '%s (found #%d)', [trns.ErrorMessage, Ord(ch)]);
+      else
+         FMsgs.AddCompilerStopFmt(CurrentPos, '%s (found "%s")', [trns.ErrorMessage, ch])
       end;
    end;
 
@@ -1512,6 +1650,11 @@ procedure TTokenizer.ConsumeToken;
 
          caMultiLineString : begin
             FTokenBuf.AppendMultiToStr(FToken.FString);
+            FToken.FTyp:=ttStrVal;
+         end;
+
+         caStringTriple : begin
+            FTokenBuf.AppendTripleToStr(FToken.FString, FMsgs, FToken.FScriptPos);
             FToken.FTyp:=ttStrVal;
          end;
 
@@ -1577,7 +1720,6 @@ procedure TTokenizer.ConsumeToken;
 
 var
    state : TState;
-   trns : TTransition;
    pch : PChar;
    ch : Char;
 begin
@@ -1599,7 +1741,9 @@ begin
             ch := #32
          else ch := #127
       end;
-      trns := state.FTransitions[ch];
+      {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
+      var trns := state.FTransitions[ch];
+      {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
 
       // Handle Errors
       if trns.IsError then begin
@@ -1739,15 +1883,12 @@ end;
 // PrepareStates
 //
 procedure TTokenizerRules.PrepareStates;
-var
-   i : Integer;
-   state : TState;
 begin
-   FReservedTokens:=FSymbolTokens+FReservedNames;
+   FReservedTokens := FSymbolTokens+FReservedNames;
 
-   FEOFTransition:=TErrorTransition.Create('');
-   for i:=0 to FStates.Count-1 do begin
-      state:=FStates[i];
+   FEOFTransition := TErrorTransition.Create('');
+   for var i := 0 to FStates.Count-1 do begin
+      var state := FStates[i];
       if (state.FTransitions[#0]=nil) or not (state.FTransitions[#0] is TErrorTransition) then
          state.FTransitions[#0]:=FEOFTransition;
    end;
@@ -1755,9 +1896,10 @@ end;
 
 // CreateState
 //
-function TTokenizerRules.CreateState : TState;
+function TTokenizerRules.CreateState(const stateName : String) : TState;
 begin
-   Result:=TState.Create;
+   Result := TState.Create;
+   Result.FName := stateName;
    FStates.Add(Result);
 end;
 

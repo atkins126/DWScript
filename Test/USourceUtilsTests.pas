@@ -53,6 +53,7 @@ type
          procedure StaticClassSuggest;
          procedure ClassFieldSuggest;
          procedure RecordConstSuggest;
+         procedure WithBlockSuggest;
          procedure SuggestInBlockWithError;
          procedure NormalizeOverload;
          procedure NormalizeImplicit;
@@ -74,6 +75,7 @@ type
          procedure FunctionCaptionDescription;
          procedure PropertiesDescription;
          procedure ConstantsDescription;
+         procedure SetOfDescription;
    end;
 
 // ------------------------------------------------------------------
@@ -955,6 +957,25 @@ begin
    CheckEquals('xyz', sugg.Code[1]);
 end;
 
+// WithBlockSuggest
+//
+procedure TSourceUtilsTests.WithBlockSuggest;
+var
+   prog : IdwsProgram;
+   sugg : IdwsSuggestions;
+   scriptPos : TScriptPos;
+begin
+   prog:=FCompiler.Compile( 'with v := 1 do'#13#10
+                           +'Print(v.ToS'#13#10);
+
+   scriptPos := TScriptPos.Create(prog.SourceList[0].SourceFile, 2, 12);
+
+   sugg:=TdwsSuggestions.Create(prog, scriptPos);
+   CheckEquals(2, sugg.Count);
+   CheckEquals('ToString () : String', sugg.Caption[0]);
+   CheckEquals('ToString (base: Integer) : String', sugg.Caption[1]);
+end;
+
 // UnitNamesSuggest
 //
 procedure TSourceUtilsTests.UnitNamesSuggest;
@@ -1255,6 +1276,28 @@ begin
    CheckEquals('const s: String = ''foobar''', (prog.Table.FindLocal('s') as TConstSymbol).Description);
    CheckEquals('const s2: String = "foo''bar"', (prog.Table.FindLocal('s2') as TConstSymbol).Description);
    CheckEquals('const v: Variant = Null', (prog.Table.FindLocal('v') as TConstSymbol).Description);
+end;
+
+// SetOfDescription
+//
+procedure TSourceUtilsTests.SetOfDescription;
+var
+   prog : IdwsProgram;
+begin
+   prog := FCompiler.Compile(
+        'type TTestEnum = enum (Alpha = 0, Beta = 3, Gamma = 100);'#10
+      + 'type TTestSet = set of TTestEnum;'#10
+      + 'const s1 : TTestSet = [];'#10
+      + 'const s2 : TTestSet = [ TTestEnum.Alpha ];'#10
+      + 'const s3 : TTestSet = [ TTestEnum.Beta, TTestEnum.Gamma ];'#10
+      + 'const s4 : TTestSet = [ TTestEnum(10) ];'#10
+   );
+   CheckFalse(prog.Msgs.HasErrors, prog.Msgs.AsInfo);
+
+   CheckEquals('const s1: TTestSet = []', (prog.Table.FindLocal('s1') as TConstSymbol).Description);
+   CheckEquals('const s2: TTestSet = [ TTestEnum.Alpha ]', (prog.Table.FindLocal('s2') as TConstSymbol).Description);
+   CheckEquals('const s3: TTestSet = [ TTestEnum.Beta, TTestEnum.Gamma ]', (prog.Table.FindLocal('s3') as TConstSymbol).Description);
+   CheckEquals('const s4: TTestSet = [ TTestEnum(10) ]', (prog.Table.FindLocal('s4') as TConstSymbol).Description);
 end;
 
 // SuggestInBlockWithError

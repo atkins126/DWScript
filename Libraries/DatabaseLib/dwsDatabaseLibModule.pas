@@ -1,11 +1,26 @@
+{**********************************************************************}
+{                                                                      }
+{    "The contents of this file are subject to the Mozilla Public      }
+{    License Version 1.1 (the "License"); you may not use this         }
+{    file except in compliance with the License. You may obtain        }
+{    a copy of the License at http://www.mozilla.org/MPL/              }
+{                                                                      }
+{    Software distributed under the License is distributed on an       }
+{    "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, either express       }
+{    or implied. See the License for the specific language             }
+{    governing rights and limitations under the License.               }
+{                                                                      }
+{    Copyright Eric Grange / Creative IT                               }
+{                                                                      }
+{**********************************************************************}
 unit dwsDatabaseLibModule;
 
 interface
 
 uses
-  SysUtils, Classes, Masks,
-  dwsStrings, dwsUtils, dwsExprList, dwsXPlatform, dwsInfo, dwsFileSystem,
-  dwsComp, dwsExprs, dwsSymbols, dwsStack, dwsDatabase, dwsJSON, dwsErrors;
+   System.SysUtils, System.Classes,
+   dwsExprList, dwsInfo, dwsFileSystem, dwsComp, dwsExprs, dwsSymbols,
+   dwsDatabase, dwsJSON;
 
 type
 
@@ -118,12 +133,14 @@ type
     procedure dwsDatabaseClassesDataBaseMethodsQueryFastEvalScriptObj(
       baseExpr: TTypedExpr; const args: TExprBaseListExec;
       var result: IScriptObj);
+    procedure dwsDatabaseClassesDataBaseMethodsSetStringifyDateTimeAsUnixTimeEval(
+      Info: TProgramInfo; ExtObject: TObject);
   private
     { Private declarations }
     FFileSystem : IdwsFileSystem;
 
     procedure SetScript(aScript : TDelphiWebScript);
-    procedure RaiseDBException(Info: TProgramInfo; const msg : String);
+    procedure RaiseDBException(Info: TProgramInfo; const msgFmt : String; const args: array of const);
 
   public
     { Public declarations }
@@ -137,6 +154,7 @@ type
    TScriptDataBase = class
       Intf : IdwsDataBase;
       LowerCaseStringify : Boolean;
+      DateTimeAsUnixTime : Boolean;
    end;
 
    TScriptDataSet = class
@@ -149,7 +167,6 @@ type
          function IndexOfField(const aName : String) : Integer;
          function FieldByName(const args : TExprBaseListExec) : IdwsDataField;
          function Step : Boolean;
-         class procedure WriteValueToJSON(wr : TdwsJSONWriter; const fld : IdwsDataField); static;
          procedure WriteToJSON(wr : TdwsJSONWriter; initial : Integer);
          function Stringify : String;
          function StringifyAll(maxRows : Integer) : String;
@@ -163,14 +180,19 @@ type
          property WriterOptions : TdwsJSONWriterOptions read FWriterOptions;
    end;
 
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
 implementation
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
 
 {$R *.dfm}
 
-uses dwsRandom;
-
-resourcestring
-   FIELD_NOT_FOUND = 'Field ''%s'' not found';
+uses
+   System.Masks,
+   dwsXPlatform, dwsRandom, dwsConstExprs, dwsStrings, dwsUtils;
 
 type
 
@@ -207,10 +229,9 @@ end;
 function TScriptDataSet.FieldByName(const args : TExprBaseListExec) : IdwsDataField;
 var
    fieldName : String;
-   index : Integer;
 begin
    fieldName := args.AsString[0];
-   index := IndexOfField(fieldName);
+   var index := IndexOfField(fieldName);
    if index >= 0 then
       Result := Intf.GetField(index)
    else raise EDWSDataBase.CreateFmt('Unknown field "%s"', [fieldName]);
@@ -226,9 +247,21 @@ begin
    Result:=not Intf.EOF;
 end;
 
-// WriteValueToJSON
+// WriteToJSON
 //
-class procedure TScriptDataSet.WriteValueToJSON(wr : TdwsJSONWriter; const fld : IdwsDataField);
+procedure TScriptDataSet.WriteToJSON(wr : TdwsJSONWriter; initial : Integer);
+var
+   fld : IdwsDataField;
+
+   procedure ProcessBlob;
+   var
+      blob : RawByteString;
+      buf : String;
+   begin
+      blob := fld.AsBlob;
+      RawByteStringToScriptString(blob, buf);
+      wr.WriteString(buf);
+   end;
 
    procedure ProcessString;
    var
@@ -239,31 +272,25 @@ class procedure TScriptDataSet.WriteValueToJSON(wr : TdwsJSONWriter; const fld :
    end;
 
 begin
-   if fld.IsNull then
-      wr.WriteNull
-   else case fld.DataType of
-      dftInteger : wr.WriteInteger(fld.AsInteger);
-      dftFloat : wr.WriteNumber(fld.AsFloat);
-      dftString, dftBlob : ProcessString;
-      dftBoolean : wr.WriteBoolean(fld.AsBoolean);
-      dftDateTime : wr.WriteDate(fld.AsFloat);
-   else
-      wr.WriteNull;
-   end;
-end;
-
-// WriteToJSON
-//
-procedure TScriptDataSet.WriteToJSON(wr : TdwsJSONWriter; initial : Integer);
-var
-   i : Integer;
-   fld : IdwsDataField;
-begin
    wr.BeginObject;
-   for i:=initial to Intf.FieldCount-1 do begin
+   for var i := initial to Intf.FieldCount-1 do begin
       fld:=intf.Fields[i];
       wr.WriteName(fld.Name);
-      WriteValueToJSON(wr, fld);
+      if fld.IsNull then
+         wr.WriteNull
+      else case fld.DataType of
+         dftInteger : wr.WriteInteger(fld.AsInteger);
+         dftFloat : wr.WriteNumber(fld.AsFloat);
+         dftString : ProcessString;
+         dftBlob : ProcessBlob;
+         dftBoolean : wr.WriteBoolean(fld.AsBoolean);
+         dftDateTime :
+            if woDateTimeAsUnixTime in WriterOptions then
+               wr.WriteUnixTime(fld.AsFloat)
+            else wr.WriteDate(fld.AsFloat);
+      else
+         wr.WriteNull;
+      end;
    end;
    wr.EndObject;
 end;
@@ -271,10 +298,8 @@ end;
 // Stringify
 //
 function TScriptDataSet.Stringify : String;
-var
-   wr : TdwsJSONWriter;
 begin
-   wr:=TdwsJSONWriter.Create(nil, WriterOptions);
+   var wr := TdwsJSONWriter.Create(nil, WriterOptions);
    try
       WriteToJSON(wr, 0);
       Result:=wr.ToString;
@@ -286,20 +311,18 @@ end;
 // StringifyAll
 //
 function TScriptDataSet.StringifyAll(maxRows : Integer) : String;
-var
-   wr : TdwsJSONWriter;
 begin
-   wr:=TdwsJSONWriter.Create(nil, WriterOptions);
+   var wr := TdwsJSONWriter.Create(nil, WriterOptions);
    try
       wr.BeginArray;
       while not Intf.EOF do begin
          WriteToJSON(wr, 0);
          Intf.Next;
          Dec(maxRows);
-         if maxRows=0 then break;
+         if maxRows = 0 then break;
       end;
       wr.EndArray;
-      Result:=wr.ToString;
+      Result := wr.ToString;
    finally
       wr.Free;
    end;
@@ -309,10 +332,9 @@ end;
 //
 function TScriptDataSet.StringifyMap(maxRows : Integer) : String;
 var
-   wr : TdwsJSONWriter;
    buf : String;
 begin
-   wr:=TdwsJSONWriter.Create(nil, WriterOptions);
+   var wr := TdwsJSONWriter.Create(nil, WriterOptions);
    try
       wr.BeginObject;
       while not Intf.EOF do begin
@@ -335,7 +357,6 @@ end;
 function TScriptDataSet.ToSeparated(maxRows : Integer; const separator, quoteChar : String) : String;
 var
    wobs : TWriteOnlyBlockStream;
-   i : Integer;
    s, doubleQuote : String;
    fields : array of IdwsDataField;
    needQuoteChars : array [ 32..127 ] of Boolean;
@@ -350,11 +371,10 @@ var
 
    procedure WriteQuotedIfNecessary;
    var
-      i : Integer;
       p : PChar;
    begin
       p := Pointer(s);
-      for i := 1 to Length(s) do begin
+      for var i := 1 to Length(s) do begin
          case Ord(p[i-1]) of
             Low(needQuoteChars)..High(needQuoteChars) :
                if needQuoteChars[Ord(p[i-1])] then begin
@@ -382,12 +402,12 @@ begin
 
    // prepare local fields array
    SetLength(fields, Intf.FieldCount);
-   for i := 0 to High(fields) do
+   for var i := 0 to High(fields) do
       fields[i] := Intf.Fields[i];
 
    wobs := TWriteOnlyBlockStream.AllocFromPool;
    try
-      for i := 0 to High(fields) do begin
+      for var i := 0 to High(fields) do begin
          if i > 0 then
             wobs.WriteString(separator);
          s := fields[i].Name;
@@ -395,7 +415,7 @@ begin
       end;
       wobs.WriteCRLF;
       while not Intf.EOF do begin
-         for i := 0 to High(fields) do begin
+         for var i := 0 to High(fields) do begin
             if i > 0 then
                wobs.WriteString(separator);
             fields[i].GetAsString(s);
@@ -416,7 +436,6 @@ end;
 //
 procedure TScriptDataSet.PrepareScriptFields(programInfo : TProgramInfo; var fieldsInfo : IInfo);
 var
-   i : Integer;
    dataSetInfo : IInfo;
    dataFieldInfo : IInfo;
    dataFieldsArray : IScriptDynArray;
@@ -431,7 +450,7 @@ begin
    dataFieldsArray.ArrayLength:=Intf.FieldCount;
 
    dataFieldConstructor:=programInfo.Vars['DataField'].Method['Create'];
-   for i:=0 to Intf.FieldCount-1 do begin
+   for var i := 0 to Intf.FieldCount-1 do begin
       dataFieldInfo:=dataFieldConstructor.Call;
       dataFieldObj:=TDataField.Create;
       dataFieldObj.Intf:=Intf.Fields[i];
@@ -483,10 +502,12 @@ end;
 
 // RaiseDBException
 //
-procedure TdwsDatabaseLib.RaiseDBException(Info: TProgramInfo; const msg : String);
+procedure TdwsDatabaseLib.RaiseDBException(Info: TProgramInfo; const msgFmt : String; const args: array of const);
 var
    exceptObj : IScriptObj;
+   msg : String;
 begin
+   msg := Format(msgFmt, args);
    exceptObj:=Info.Vars['EDBException'].Method[SYS_TOBJECT_CREATE].Call([msg]).ScriptObj;
    (exceptObj.ExternalObject as TdwsExceptionContext).Skip(1); // temporary constructor expression
    Info.RaiseExceptObj(msg, exceptObj);
@@ -533,10 +554,8 @@ begin
    if obj is TScriptDataBase then begin
       db := TScriptDataBase(obj).Intf;
       checkRelease := db.CanReleaseToPool;
-      if checkRelease <> '' then begin
-         checkRelease := 'Releasing to pool not allowed: ' + checkRelease;
-         RaiseDBException(Info, checkRelease);
-      end;
+      if checkRelease <> '' then
+         RaiseDBException(Info, 'Releasing to pool not allowed: %s', [ checkRelease ]);
    end;
    nb := Info.ParamAsInteger[2];
    Info.ParamAsVariant[1] := IUnknown(nil);
@@ -562,17 +581,16 @@ end;
 
 class procedure TdwsDatabaseLib.CleanupDataBasePool(const filter : String = '*');
 var
-   i : Integer;
    mask : TMask;
    q, detached : TSimpleQueue<IdwsDataBase>;
    db : IdwsDataBase;
 begin
-   detached:=TSimpleQueue<IdwsDataBase>.Create;
+   detached := TSimpleQueue<IdwsDataBase>.Create;
    mask:=TMask.Create(filter);
    try
       vPoolsCS.BeginWrite;
       try
-         for i:=0 to vPools.HighIndex do begin
+         for var i := 0 to vPools.HighIndex do begin
             q:=vPools.BucketObject[i];
             if q=nil then continue;
             if mask.Matches(vPools.BucketName[i]) then begin
@@ -750,6 +768,9 @@ begin
 
    if dbo.LowerCaseStringify then
       dataSet.FWriterOptions := [ woLowerCaseNames ];
+   if dbo.DateTimeAsUnixTime then
+      Include(dataSet.FWriterOptions, woDateTimeAsUnixTime);
+
 
    dataSetScript.ExternalObject := dataSet;
    result := IScriptObj(dataSetScript);
@@ -765,6 +786,12 @@ procedure TdwsDatabaseLib.dwsDatabaseClassesDataBaseMethodsSetOptionEval(
   Info: TProgramInfo; ExtObject: TObject);
 begin
    (ExtObject as TScriptDataBase).Intf.Options[Info.ParamAsString[0]] := Info.ParamAsString[1];
+end;
+
+procedure TdwsDatabaseLib.dwsDatabaseClassesDataBaseMethodsSetStringifyDateTimeAsUnixTimeEval(
+  Info: TProgramInfo; ExtObject: TObject);
+begin
+   (ExtObject as TScriptDataBase).DateTimeAsUnixTime:=Info.ParamAsBoolean[0];
 end;
 
 procedure TdwsDatabaseLib.dwsDatabaseClassesDataBaseMethodsLowerCaseStringifyEval(
@@ -993,7 +1020,7 @@ begin
    fieldName:=Info.ParamAsString[0];
    index:=(ExtObject as TScriptDataSet).IndexOfField(fieldName);
    if index<0 then
-      RaiseDBException(Info, Format(FIELD_NOT_FOUND, [fieldName]))
+      RaiseDBException(Info, 'Field ''%s'' not found', [ fieldName ])
    else begin
       TScriptDataSet.NeedScriptFields(Info, ExtObject, fieldsInfo);
       Info.ResultAsVariant:=fieldsInfo.Element([index]).Value;

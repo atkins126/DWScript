@@ -19,8 +19,8 @@ unit dwsWebLibModule;
 interface
 
 uses
-   Winapi.Windows, Winapi.WinInet, Winapi.WinHTTP, System.Variants,
-   System.SysUtils, System.Classes, System.StrUtils, System.Types,
+   Winapi.Windows, Winapi.WinInet, Winapi.WinHTTP,
+   System.Variants,  System.SysUtils, System.Classes, System.Types,
    SynZip, SynCrtSock, SynWinSock,
    dwsUtils, dwsComp, dwsExprs, dwsWebEnvironmentTypes, dwsWebEnvironment, dwsExprList, dwsSymbols,
    dwsJSONConnector, dwsCryptoXPlatform, dwsHTTPSysServerEvents, dwsWebServerInfo,
@@ -221,6 +221,9 @@ type
   public
     { Public declaration }
     property Server : IWebServerInfo read FServer write FServer;
+
+    class procedure DeflateDecompress(var data : RawByteString); static;
+    class procedure DeflateCompress(var data : RawByteString; compressionLevel : Integer); static;
   end;
 
 implementation
@@ -247,24 +250,24 @@ var
 begin
    obj.EvalAsString(obj.FieldAddress('ID'), buf);
    if buf <> '' then
-      Result := 'id: ' + UTF8Encode(buf) + #10;
+      Result := 'id: ' + StringToUTF8(buf) + #10;
    obj.EvalAsString(obj.FieldAddress('Name'), buf);
    if buf <> '' then
-      Result := Result + 'event: ' + UTF8Encode(buf) + #10;
+      Result := Result + 'event: ' + StringToUTF8(buf) + #10;
    i := obj.AsInteger[obj.FieldAddress('Retry')];
    if i > 0 then
       Result := Result + 'retry: ' + ScriptStringToRawByteString(IntToStr(i)) + #10;
    dyn := (obj.AsInterface[obj.FieldAddress('Data')] as IScriptDynArray);
    for i := 0 to dyn.ArrayLength-1 do begin
       dyn.EvalAsString(i, buf);
-      Result := Result + 'data: ' + UTF8Encode(buf) + #10;
+      Result := Result + 'data: ' + StringToUTF8(buf) + #10;
    end;
    Result := Result + #10;
 end;
 
 // DeflateCompress
 //
-procedure DeflateCompress(var data : RawByteString; compressionLevel : Integer);
+class procedure TdwsWebLib.DeflateCompress(var data : RawByteString; compressionLevel : Integer);
 var
    strm : TZStream;
    tmp : RawByteString;
@@ -288,7 +291,7 @@ end;
 
 // DeflateDecompress
 //
-procedure DeflateDecompress(var data : RawByteString);
+class procedure TdwsWebLib.DeflateDecompress(var data : RawByteString);
 const
    cDeflateErrors : array [-6 .. -1] of String = (
       'incompatible version', // Z_VERSION_ERROR (-6)
@@ -832,7 +835,7 @@ begin
       args.EvalAsString(1, contentType);
       if contentType <> '' then
          fileName := fileName + #0 + contentType;
-      wr.ContentData := UTF8Encode(fileName);
+      wr.ContentData := StringToUTF8(fileName);
       wr.ContentType := HTTP_RESP_STATICFILE;
    end;
 end;

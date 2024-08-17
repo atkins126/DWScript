@@ -62,6 +62,8 @@ type
          procedure RecompileInContext2;
          procedure RecompileInContext3;
          procedure RecompileInContext4;
+         procedure RecompileInContextUses;
+         procedure RecompileInContextUnit;
 //         procedure RecompileInContextVarArray;
          procedure ScriptPos;
          procedure MonkeyTest;
@@ -114,6 +116,8 @@ type
          procedure DiscardEmptyElse;
          procedure AnonymousRecordWithConstArrayField;
 
+         procedure UnderscoreNumbers;
+
          procedure DelphiDialectProcedureTypes;
 
          procedure LambdaAsConstParam;
@@ -121,6 +125,8 @@ type
          procedure RoundTripTest;
 
          procedure ConstructorOverload;
+
+         procedure EndDot;
    end;
 
    ETestException = class (Exception);
@@ -1071,6 +1077,66 @@ begin
    end;
 end;
 *)
+
+// RecompileInContextUses
+//
+procedure TCornerCasesTests.RecompileInContextUses;
+var
+   prog : IdwsProgram;
+   exec : IdwsProgramExecution;
+begin
+   prog := FCompiler.Compile( 'uses HelloWorld; Print(1);');
+
+   exec:=prog.BeginNewExecution;
+   try
+      exec.RunProgram(0);
+      CheckEquals('1', exec.Result.ToString, 'compile 1');
+   finally
+      exec.EndProgram;
+   end;
+
+   FCompiler.RecompileInContext(prog, 'uses HelloWorld; Print(2);');
+
+   exec:=prog.BeginNewExecution;
+   try
+      exec.RunProgram(0);
+      CheckEquals('2', exec.Result.ToString, 'compile 2');
+   finally
+      exec.EndProgram;
+   end;
+
+   FCompiler.RecompileInContext(prog, 'uses HelloWorld; Print(3);');
+
+   exec:=prog.BeginNewExecution;
+   try
+      exec.RunProgram(0);
+      CheckEquals('3', exec.Result.ToString, 're compile 3');
+   finally
+      exec.EndProgram;
+   end;
+end;
+
+// RecompileInContextUnit
+//
+procedure TCornerCasesTests.RecompileInContextUnit;
+var
+   prog : IdwsProgram;
+   exec : IdwsProgramExecution;
+begin
+   prog := FCompiler.Compile( 'unit Recomp; uses HelloWorld; Print(1);');
+
+   exec:=prog.BeginNewExecution;
+   try
+      exec.RunProgram(0);
+      CheckEquals('1', exec.Result.ToString, 'compile 1');
+   finally
+      exec.EndProgram;
+   end;
+
+   FCompiler.RecompileInContext(prog, 'unit Recomp; uses HelloWorld; Print(2);');
+   CheckEquals('Syntax Error: RecompileInContect does not support units [line: 1, column: 1]'#13#10, prog.Msgs.AsInfo);
+end;
+
 // ScriptPos
 //
 procedure TCornerCasesTests.ScriptPos;
@@ -1475,7 +1541,6 @@ begin
    rfs.Free;
    CheckTrue(FCompiler.Config.RuntimeFileSystem=nil, 'rfs cleared');
    CheckTrue(FCompiler.Config.ResultType is TdwsDefaultResultType, 'rt cleared');
-
 end;
 
 // ConfigTimeout
@@ -2129,7 +2194,7 @@ begin
       prog:=FCompiler.Compile('{$HINT "hello"}'#13#10'...');
       prog.Msgs.WriteJSONValue(wr);
       CheckEquals('[{"text":"hello","type":"Hint","pos":{"file":"*MainModule*","line":1,"col":3},"hintLevel":"Normal"},'
-                 +'{"text":"Unexpected \"..\".","type":"SyntaxError","pos":{"file":"*MainModule*","line":2,"col":2}}]', wr.ToString);
+                 +'{"text":"Unexpected \"..\"","type":"SyntaxError","pos":{"file":"*MainModule*","line":2,"col":2}}]', wr.ToString);
    finally
       wr.Free;
    end;
@@ -2240,6 +2305,27 @@ begin
    prog := nil;
    prog := FCompiler.Compile(code);
    CheckEquals(0, prog.Msgs.Count, 'second');
+   prog := nil;
+end;
+
+// UnderscoreNumbers
+//
+procedure TCornerCasesTests.UnderscoreNumbers;
+var
+   prog : IdwsProgram;
+   code : String;
+begin
+   code := 'Print(1_);'#10
+         + 'Print(1_2);'#10
+         + 'Print(1_2_3);'#10
+         + 'Print(4_.5);'#10
+         + 'Print(4_5.6);'#10
+         + 'Print(4_5_6.7);';
+
+   prog := FCompiler.Compile(code);
+   CheckEquals(0, prog.Msgs.Count, 'compile');
+
+   CheckEquals('1121234.545.6456.7', prog.Execute.Result.ToString);
    prog := nil;
 end;
 
@@ -2374,6 +2460,27 @@ begin
    finally
       u.Free;
    end;
+end;
+
+// EndDot
+//
+procedure TCornerCasesTests.EndDot;
+var
+   prog : IdwsProgram;
+begin
+   prog := FCompiler.Compile(
+        'unit Test; interface implementation'#10
+      + 'initialization'#10
+      + 'end'
+   );
+   CheckEquals('Warning: Dot "." expected [line: 3, column: 1]'#13#10, prog.Msgs.AsInfo);
+   prog := FCompiler.Compile(
+        'unit Test; interface implementation'#10
+      + 'initialization'#10
+      + 'finalization'#10
+      + 'end'
+   );
+   CheckEquals('Warning: Dot "." expected [line: 4, column: 1]'#13#10, prog.Msgs.AsInfo);
 end;
 
 // ------------------------------------------------------------------

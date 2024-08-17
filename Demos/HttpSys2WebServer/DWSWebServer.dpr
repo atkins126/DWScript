@@ -31,10 +31,8 @@
 }
 program DWSWebServer;
 
-{$IFNDEF VER200} // delphi 2009
-   {$WEAKLINKRTTI ON}
-   {$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
-{$ENDIF}
+{$WEAKLINKRTTI ON}
+{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
 {$WARN SYMBOL_PLATFORM OFF}
 
 {$APPTYPE CONSOLE}
@@ -42,7 +40,7 @@ program DWSWebServer;
 {$R *.res}
 
 uses
-  FastMM4,
+  FastMM4, //_AVX,
   Windows,
   SysUtils,
   dwsWindowsService,

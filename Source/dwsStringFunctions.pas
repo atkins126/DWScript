@@ -24,11 +24,8 @@ unit dwsStringFunctions;
 interface
 
 uses
-   System.Classes, System.SysUtils, System.StrUtils,
-   System.Math, System.Masks, System.Character,
-   dwsXPlatform, dwsUtils, dwsStrings,
-   dwsFunctions, dwsSymbols, dwsExprs, dwsCoreExprs, dwsExprList,
-   dwsConstExprs, dwsMagicExprs, dwsDataContext, dwsWebUtils, dwsJSON;
+   System.Classes, System.SysUtils,
+   dwsXPlatform, dwsUtils, dwsFunctions, dwsExprs, dwsExprList, dwsMagicExprs;
 
 type
 
@@ -341,6 +338,10 @@ type
     procedure DoEvalAsString(const args : TExprBaseListExec; var Result : String); override;
   end;
 
+  TStrIsASCIIFunc = class(TInternalMagicBoolFunction)
+    function DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean; override;
+  end;
+
   TGetTextFunc = class(TInternalMagicStringFunction)
     procedure DoEvalAsString(const args : TExprBaseListExec; var Result : String); override;
   end;
@@ -357,29 +358,33 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsDynamicArrays, dwsArrayExprs, dwsStack;
+uses
+   System.Math,
+   dwsDynamicArrays, dwsArrayExprs, dwsStack, dwsWebUtils, dwsStrings,
+   dwsConstExprs, dwsCoreExprs, dwsDataContext, dwsJSON, dwsSymbols;
 
 // StrRevFind
 //
-function StrRevFind(const stringSearched, stringToFind : String; startPos : Integer = 0) : Integer;
-var
-   i : Integer;
+function StrRevFind(const haystack, needle : String; startPos : Integer = 0) : Integer;
 begin
-   if (stringToFind='') or (stringSearched='') then begin
+   if (needle='') or (haystack='') then begin
       Result:=0;
       Exit;
    end;
-   if startPos<=0 then
-      startPos:=Length(stringSearched);
-   for i:=startPos-Length(stringToFind)+1 downto 1 do begin
-      if stringSearched[i]=stringToFind[1] then begin
-         if CompareMem(@stringSearched[i], @stringToFind[1], Length(stringToFind)*SizeOf(WideChar)) then begin
-            Result:=i;
-            Exit;
-         end;
+   if startPos <= 0 then
+      startPos := Length(haystack);
+
+   var needleByteLength := Length(needle)*SizeOf(WideChar);
+   var needlePtr : PChar := Pointer(needle);
+   var haystackPtr : PChar := Pointer(haystack);
+   var needleFirstChar :=  needlePtr[0];
+   for var i := startPos-Length(needle) downto 0 do begin
+      if haystackPtr[i] = needleFirstChar then begin
+         if CompareMem(@haystackPtr[i], needlePtr, needleByteLength) then
+            Exit(i+1);
       end;
    end;
-   Result:=0;
+   Result := 0;
 end;
 
 // ByteSizeToString
@@ -634,10 +639,8 @@ end;
 { TStrToJSONFunc }
 
 procedure TStrToJSONFunc.DoEvalAsString(const args : TExprBaseListExec; var Result : String);
-var
-   wobs : TWriteOnlyBlockStream;
 begin
-   wobs := TWriteOnlyBlockStream.AllocFromPool;
+   var wobs := TWriteOnlyBlockStream.AllocFromPool;
    try
       WriteJavaScriptString(wobs, args.AsString[0]);
       Result := wobs.ToString;
@@ -839,7 +842,7 @@ end;
 
 function TPosExFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 begin
-   Result:=PosEx(args.AsString[0], args.AsString[1], args.AsInteger[2]);
+   Result := Pos(args.AsString[0], args.AsString[1], args.AsInteger[2]);
 end;
 
 { TRevPosFunc }
@@ -1090,7 +1093,7 @@ end;
 
 function TStrFindFunc.DoEvalAsInteger(const args : TExprBaseListExec) : Int64;
 begin
-   Result:=PosEx(args.AsString[1], args.AsString[0], args.AsInteger[2]);
+   Result := Pos(args.AsString[1], args.AsString[0], args.AsInteger[2]);
 end;
 
 { TStrAfterFunc }
@@ -1166,7 +1169,7 @@ begin
    if p > 0 then begin
       p := p + Length(delimiter);
       args.EvalAsString(2, delimiter);
-      p2 := PosEx(delimiter, str, p);
+      p2 := Pos(delimiter, str, p);
       if p2 > 0 then
          Result := Copy(str, p, p2-p)
       else Result := Copy(str, p, Length(str));
@@ -1177,7 +1180,21 @@ end;
 
 procedure TReverseStringFunc.DoEvalAsString(const args : TExprBaseListExec; var Result : String);
 begin
-   Result:=ReverseString(args.AsString[0]);
+   args.EvalAsString(0, Result);
+   var n := Length(Result);
+   if n <= 1 then Exit;
+
+   UniqueString(Result);
+
+   var pHead := PChar(Pointer(Result));
+   var pTail := PChar(@pHead[n-1]);
+   while pHead < pTail do begin
+      var buf := pHead^;
+      pHead^ := pTail^;
+      pTail^ := buf;
+      Inc(pHead);
+      Dec(pTail);
+   end;
 end;
 
 { TNormalizeStringFunc }
@@ -1276,7 +1293,7 @@ procedure TStrSplitFunc.DoEvalAsVariant(const args : TExprBaseListExec; var resu
       p:=1;
       k:=0;
       while True do begin
-         pn := PosEx(delim, str, p);
+         pn := Pos(delim, str, p);
          if pn > 0 then begin
             dyn.Insert(k);
             dyn.AsString[k] := Copy(str, p, pn-p);
@@ -1405,6 +1422,13 @@ begin
    Result := StripAccents(args.AsString[0]);
 end;
 
+{ TStrIsASCIIFunc }
+
+function TStrIsASCIIFunc.DoEvalAsBoolean(const args : TExprBaseListExec) : Boolean;
+begin
+   Result := StrIsASCII(args.AsString[0]);
+end;
+
 { TByteSizeToStrFunc }
 
 procedure TByteSizeToStrFunc.DoEvalAsString(const args : TExprBaseListExec; var Result : String);
@@ -1531,6 +1555,8 @@ initialization
 
    RegisterInternalStringFunction(TNormalizeStringFunc, 'NormalizeString', ['str', SYS_STRING, 'form=NFC', SYS_STRING], [iffStateLess], 'Normalize');
    RegisterInternalStringFunction(TStripAccentsFunc, 'StripAccents', ['str', SYS_STRING], [iffStateLess], 'StripAccents');
+
+   RegisterInternalBoolFunction(TStrIsASCIIFunc, 'StrIsASCII', ['str', SYS_STRING], [iffStateLess], 'IsASCII');
 
    RegisterInternalStringFunction(TGetTextFunc, '_', ['str', SYS_STRING], []);
 

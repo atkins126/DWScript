@@ -48,9 +48,9 @@ type
 
    TdwsCompilerContext = class (TdwsBaseSymbolsContext)
       private
+         FProg : TObject;
          FMsgs : TdwsCompileMessageList;
          FSystemTable : TSystemSymbolTable;
-         FProg : TObject;
          FUnifiedConstants : TObject;
          FOrphanedObjects : TSimpleStack<TRefCountedObject>;
          FUnitList : TIdwsUnitList;
@@ -80,9 +80,9 @@ type
 
          procedure OrphanObject(obj : TRefCountedObject);
 
-         function GetTempAddr(DataSize: Integer = -1): Integer;
+         function GetTempAddr(dataSize: Integer = -1): Integer;
          function Level : Integer;
-         function Table : TSymbolTable;
+         function Table : TSymbolTable; inline;
 
          function CreateConstExpr(typ : TTypeSymbol; const value : Variant) : TExprBase;
          function CreateInteger(value : Int64) : TExprBase;
@@ -126,21 +126,10 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses Variants,
-   dwsExprs, dwsUnifiedConstants, dwsConstExprs, dwsOperators, dwsCompilerUtils,
-   dwsConvExprs, dwsDynamicArrays, dwsAssociativeArrays;
-
-type
-   TdwsCompilerContextHelper = class helper for TdwsCompilerContext
-      function GetProgram : TdwsProgram; inline;
-   end;
-
-// GetProgram
-//
-function TdwsCompilerContextHelper.GetProgram : TdwsProgram;
-begin
-   Result := TdwsProgram(FProg);
-end;
+uses
+   System.Variants,
+   dwsUnifiedConstants, dwsConstExprs, dwsOperators, dwsCompilerUtils,
+   dwsConvExprs, dwsDynamicArrays, dwsAssociativeArrays, dwsExprs;
 
 // ------------------
 // ------------------ TdwsCompilerContext ------------------
@@ -197,23 +186,23 @@ end;
 
 // GetTempAddr
 //
-function TdwsCompilerContext.GetTempAddr(DataSize: Integer = -1): Integer;
+function TdwsCompilerContext.GetTempAddr(dataSize: Integer = -1): Integer;
 begin
-   Result := GetProgram.GetTempAddr(DataSize);
+   Result := TdwsProgram(FProg).GetTempAddr(DataSize);
 end;
 
 // Level
 //
 function TdwsCompilerContext.Level : Integer;
 begin
-   Result := GetProgram.Level;
+   Result := TdwsProgram(FProg).Level;
 end;
 
 // Table
 //
 function TdwsCompilerContext.Table : TSymbolTable;
 begin
-   Result := GetProgram.Table;
+   Result := TdwsProgram(FProg).Table;
 end;
 
 // CreateConstExpr
@@ -280,7 +269,7 @@ begin
    typedExpr := TObject(expr) as TTypedExpr;
    if typedExpr.Typ = nil then Exit(False);
 
-   prog := GetProgram;
+   prog := TdwsProgram(FProg);
    opSym := prog.Table.FindImplicitCastOperatorFor(typedExpr.Typ, toTyp);
    if opSym <> nil then begin
       funcExpr := CreateSimpleFuncExpr(Self, scriptPos, opSym.UsesSym);
@@ -390,8 +379,9 @@ begin
    FSystemTable := val;
    SetBaseTypes(FSystemTable.BaseSymbolTypes);
 
-   FTypDefaultConstructor := TypTObject.Members.FindSymbol(SYS_TOBJECT_CREATE, cvPublic) as TMethodSymbol;
-   FTypDefaultDestructor := TypTObject.Members.FindSymbol(SYS_TOBJECT_DESTROY, cvPublic) as TMethodSymbol;
+   var members := TypTObject.Members;
+   FTypDefaultConstructor := members.FindSymbol(SYS_TOBJECT_CREATE, cvPublic) as TMethodSymbol;
+   FTypDefaultDestructor := members.FindSymbol(SYS_TOBJECT_DESTROY, cvPublic) as TMethodSymbol;
 end;
 
 // SetProg

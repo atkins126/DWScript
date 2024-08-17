@@ -24,9 +24,9 @@ unit dwsSymbols;
 interface
 
 uses
-   System.SysUtils, System.Classes, System.Math, System.Types, System.TypInfo,
+   System.SysUtils, System.Classes, System.Types,
    dwsErrors, dwsUtils, dwsDateTime, dwsScriptSource, dwsSpecialKeywords,
-   dwsTokenTypes, dwsStack, dwsDataContext, dwsArrayMethodKinds
+   dwsTokenTypes, dwsStack, dwsDataContext, dwsArrayMethodKinds, dwsFileSystem
    {$ifdef FPC},LazUTF8{$endif};
 
 type
@@ -413,7 +413,7 @@ type
    TSymbolTableFlag = (stfSorted,
                        stfHasChildTables, stfHasHelpers,
                        stfHasLocalOperators, stfHasParentOperators, stfHasOperators,
-                       stfHasClassSymbols);
+                       stfHasClassSymbols, stfHasNestedTypes );
    TSymbolTableFlags = set of TSymbolTableFlag;
 
    TSimpleSymbolList = TSimpleList<TSymbol>;
@@ -426,12 +426,10 @@ type
          FParents : TTightList;
          FFlags : TSymbolTableFlags;
 
-         function GetParentCount : Integer;
          function GetParents(Index: Integer) : TSymbolTable; inline;
 
       protected
          function GetSymbol(Index: Integer): TSymbol; inline;
-         function GetCount : Integer; inline;
 
          procedure SortSymbols(minIndex, maxIndex : Integer);
 
@@ -487,14 +485,15 @@ type
          function HasSymbol(sym : TSymbol) : Boolean;
          function HasMethods : Boolean;
          function HasClassSymbols : Boolean;
+         function HasNestedtypes : Boolean; inline;
          class function IsUnitTable : Boolean; virtual;
 
          procedure Initialize(const msgs : TdwsCompileMessageList); virtual;
 
          property AddrGenerator : TAddrGenerator read FAddrGenerator;
-         property Count : Integer read GetCount;
+         property Count : Integer read FSymbols.FCount;
          property Symbols[x : Integer] : TSymbol read GetSymbol; default;
-         property ParentCount : Integer read GetParentCount;
+         property ParentCount : Integer read FParents.FCount;
          property Parents[Index : Integer] : TSymbolTable read GetParents;
 
          type
@@ -1186,7 +1185,7 @@ type
          function SpecializeType(const context : ISpecializationContext) : TTypeSymbol; override;
    end;
 
-   TBaseIntegerSymbol = class (TBaseSymbol)
+   TBaseIntegerSymbol = class sealed (TBaseSymbol)
       public
          constructor Create;
 
@@ -1194,14 +1193,14 @@ type
          function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
    end;
 
-   TBaseFloatSymbol = class (TBaseSymbol)
+   TBaseFloatSymbol = class sealed (TBaseSymbol)
       public
          constructor Create;
 
          procedure InitDataContext(const data : IDataContext; offset : NativeInt); override;
    end;
 
-   TBaseStringSymbol = class (TBaseSymbol)
+   TBaseStringSymbol = class sealed (TBaseSymbol)
       private
          FLengthPseudoSymbol : TPseudoMethodSymbol;
          FHighPseudoSymbol : TPseudoMethodSymbol;
@@ -1221,7 +1220,7 @@ type
          function LowPseudoSymbol(baseSymbols : TdwsBaseSymbolsContext) : TPseudoMethodSymbol; inline;
    end;
 
-   TBaseBooleanSymbol = class (TBaseSymbol)
+   TBaseBooleanSymbol = class sealed (TBaseSymbol)
       public
          constructor Create;
 
@@ -1292,6 +1291,8 @@ type
 
          function ValueToOffsetMask(value : Integer; var mask : Int64) : Integer; inline;
          function ValueToByteOffsetMask(value : Integer; var mask : Byte) : Integer; inline;
+
+         function GetValueDescription(const value : IDataContext) : String;
 
          function ElementByValue(value : Integer) : TElementSymbol;
 
@@ -1426,7 +1427,6 @@ type
       private
          FOwner : TCompositeTypeSymbol;
 
-
       public
          procedure AddParent(parent : TMembersSymbolTable);
 
@@ -1523,6 +1523,8 @@ type
 
          function MembersVisibilities : TdwsVisibilities;
 
+         function HasNestedTypes : Boolean; inline;
+
          function CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol; virtual; abstract;
          function CreateAnonymousMethod(aFuncKind : TFuncKind; aVisibility : TdwsVisibility;
                                         aCreateOptions : TMethodCreateOptions
@@ -1598,6 +1600,7 @@ type
          FDefaultValue : IDataContext;
          FDefaultExpr : TExprBase;
          FNextField : TFieldSymbol;
+         FReadOnly : Boolean;
 
       public
          constructor Create(const name : String; typ : TTypeSymbol;
@@ -1615,6 +1618,7 @@ type
          property DefaultValue : IDataContext read FDefaultValue write FDefaultValue;
          property DefaultExpr : TExprBase read FDefaultExpr write FDefaultExpr;
          property NextField : TFieldSymbol read FNextField write FNextField;
+         property ReadOnly : Boolean read FReadOnly write FReadOnly;
    end;
 
    TRecordSymbolFlag = (
@@ -1715,6 +1719,7 @@ type
          FVisibility : TdwsVisibility;
          FDeprecatedMessage : String;
          FUserDescription : String;
+         FIsReintroduce : Boolean;
 
       protected
          function GetCaption : String; override;
@@ -1750,6 +1755,7 @@ type
          property DeprecatedMessage : String read FDeprecatedMessage write FDeprecatedMessage;
          property IsDeprecated : Boolean read GetIsDeprecated;
          property UserDescription : String read FUserDescription write FUserDescription;
+         property IsReintroduce : Boolean read FIsReintroduce write FIsReintroduce;
    end;
 
    // class operator X (params) uses method;
@@ -2103,26 +2109,28 @@ type
    // TdwsExecution
    //
    TdwsExecution = class abstract (TInterfacedSelfObject, IdwsExecution)
-      protected
+      protected // fields here are ordered to reduce their offset
          FStack : TStackMixIn;
          FStatus : TExecutionStatusResult;
-         FCallStack : TTightStack; // expr + prog duples
          FSelfScriptObject : PIScriptObj;
-         FSelfScriptClassSymbol : TClassSymbol;
 
-         FDebugger : IDebugger;
          FIsDebugging : Boolean;
-         FDebugSuspended : Integer;
-
-         FSleepTime : Integer;
-         FSleeping : Boolean;
 
          FInternalExecution : Integer;
 
+         FProgramState : TProgramState;
+
+         FCallStack : TTightStack; // expr + prog duples
+
+         FDebugger : IDebugger;
+         FDebugSuspended : Integer;
+
          FEnvironment : IdwsEnvironment;
 
-      protected
-         FProgramState : TProgramState;  // here to reduce its offset
+         FSelfScriptClassSymbol : TClassSymbol;
+
+         FSleepTime : Integer;
+         FSleeping : Boolean;
 
          function GetEnvironment : IdwsEnvironment;
          procedure SetEnvironment(const val : IdwsEnvironment);
@@ -2138,6 +2146,7 @@ type
          FRandSeed : UInt64;
 
          FFormatSettings : TdwsFormatSettings;
+
 
       protected
          function  GetDebugger : IDebugger;
@@ -2160,6 +2169,8 @@ type
          function GetSleeping : Boolean;
 
          function GetFormatSettings : TdwsFormatSettings;
+
+         class procedure DoDebug(exec : TdwsExecution; expr : TExprBase); static;
 
       public
          constructor Create(const stackParams : TStackParameters);
@@ -2202,6 +2213,7 @@ type
          procedure LocalizeString(const aString : String; var Result : String); virtual;
 
          function ValidateFileName(const path : String) : String; virtual;
+         function FileSystem : IdwsFileSystemRW; virtual;
 
          function Random : Double;
 
@@ -2396,7 +2408,9 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsCompilerUtils, dwsStrings, dwsXPlatform;
+uses
+   System.Math, System.Variants, System.TypInfo,
+   dwsCompilerUtils, dwsStrings, dwsXPlatform;
 
 // ------------------
 // ------------------ TdwsExprLocation ------------------
@@ -2430,21 +2444,17 @@ end;
 // CallStackToString
 //
 class function TExprBase.CallStackToString(const callStack : TdwsExprLocationArray) : String;
-var
-   i : Integer;
-   buffer : TWriteOnlyBlockStream;
-   expr : TExprBase;
 begin
-   buffer:=TWriteOnlyBlockStream.Create;
+   var buffer := TWriteOnlyBlockStream.Create;
    try
-      for i:=0 to High(callStack) do begin
-         if i>0 then
+      for var i := 0 to High(callStack) do begin
+         if i > 0 then
             buffer.WriteString(#13#10);
-         expr := callStack[i].Expr;
+         var expr := callStack[i].Expr;
          if expr <> nil then
             buffer.WriteString(expr.ScriptLocation(callStack[i].Prog));
       end;
-      Result:=buffer.ToString;
+      Result := buffer.ToString;
    finally
       buffer.Free;
    end;
@@ -2454,7 +2464,6 @@ end;
 //
 function TExprBase.RecursiveEnumerateSubExprs(const callback : TExprBaseEnumeratorProc) : Boolean;
 var
-   i : Integer;
    abort : Boolean;
    base, expr : TExprBase;
    stack : TSimpleStack<TExprBase>;
@@ -2467,7 +2476,7 @@ begin
       repeat
          base:=stack.Peek;
          stack.Pop;
-         for i:=0 to base.SubExprCount-1 do begin
+         for var i := 0 to base.SubExprCount-1 do begin
             expr:=base.SubExpr[i];
             if expr<>nil then begin
                stack.Push(expr);
@@ -2485,12 +2494,9 @@ end;
 // ReferencesVariable
 //
 function TExprBase.ReferencesVariable(varSymbol : TDataSymbol) : Boolean;
-var
-   i : Integer;
-   sub : TExprBase;
 begin
-   for i:=0 to SubExprCount-1 do begin
-      sub:=SubExpr[i];
+   for var i := 0 to SubExprCount-1 do begin
+      var sub := SubExpr[i];
       if (sub<>nil) and sub.ReferencesVariable(varSymbol) then
          Exit(True)
    end;
@@ -3019,6 +3025,13 @@ begin
       Result:=Result+Parent.MembersVisibilities;
 end;
 
+// HasNestedTypes
+//
+function TCompositeTypeSymbol.HasNestedTypes : Boolean;
+begin
+   Result := Members.HasNestedTypes;
+end;
+
 // CheckMethodsImplemented
 //
 function CompareSourceMethSymbolByDeclarePos(a, b : Pointer) : Integer;
@@ -3045,13 +3058,12 @@ procedure TCompositeTypeSymbol.CheckMethodsImplemented(const msgs : TdwsCompileM
    end;
 
 var
-   i : Integer;
    methSym : TMethodSymbol;
    msg : TScriptMessage;
    errorList : TTightList;
 begin
    errorList.Initialize;
-   for i := 0 to FMembers.Count-1 do begin
+   for var i := 0 to FMembers.Count-1 do begin
       if FMembers[i] is TMethodSymbol then begin
          methSym := TMethodSymbol(FMembers[i]);
          if methSym.ClassType=TAliasMethodSymbol then continue;
@@ -3072,7 +3084,7 @@ begin
    end;
    if errorList.Count > 0 then begin
       errorList.Sort(CompareSourceMethSymbolByDeclarePos);
-      for i := 0 to errorList.Count-1 do begin
+      for var i := 0 to errorList.Count-1 do begin
          methSym := TMethodSymbol(errorList.List[i]);
          msg:=msgs.AddCompilerErrorFmt(methSym.DeclarationPosition, CPE_MethodNotImplemented,
                                        [methSym.Name, methSym.StructSymbol.Caption]);
@@ -3153,6 +3165,7 @@ begin
          field := TFieldSymbol(member);
          fieldType := context.SpecializeType(field.Typ);
          specializedField := TFieldSymbol.Create(field.Name, fieldType, field.Visibility);
+         specializedField.ExternalName := field.ExternalName;
          destination.AddField(specializedField);
          context.RegisterSpecialization(field, specializedField);
       end;
@@ -3910,9 +3923,23 @@ end;
 //
 procedure GenerateParams(table : TSymbolTable; const funcParams : TParamArray;
                          const addProc : TAddParamSymbolMethod);
+
+   procedure ConvertSetOfdefaultValue(paramRec : PParamRec);
+   var
+      v : Variant;
+   begin
+      v := paramRec.DefaultValue[0];
+      if VariantIsString(v) then begin
+         Assert((v = '[]') or (v = ''),
+            'Unsupported "set of" default string value'
+         );
+         paramRec.DefaultValue.AsInteger[0] := 0;
+      end else if VariantIsOrdinal(v) or VariantIsFloat(v) then begin
+         paramRec.DefaultValue.AsInteger[0] := Round(v);
+      end else Assert(False, 'Unsupported "set of" default value');
+   end;
+
 var
-   i : Integer;
-   i64 : Int64;
    typSym : TTypeSymbol;
    baseTypClass : TClass;
    paramSym : TParamSymbol;
@@ -3921,7 +3948,7 @@ var
 begin
    typSym:=nil;
 
-   for i:=0 to High(FuncParams) do begin
+   for var i := 0 to High(FuncParams) do begin
 
       paramRec:=@FuncParams[i];
       if (typSym=nil) or not UnicodeSameText(typSym.Name, paramRec.ParamType) then
@@ -3946,12 +3973,13 @@ begin
          baseTypClass := typSym.BaseType.UnAliasedType.ClassType;
          if not baseTypClass.InheritsFrom(TBaseStringSymbol) then begin
             if baseTypClass.InheritsFrom(TBaseIntegerSymbol) then begin
-               VariantToInt64(paramRec.DefaultValue[0], i64);
-               paramRec.DefaultValue[0] := i64;
+               paramRec.DefaultValue[0] := VariantToInt64(paramRec.DefaultValue[0]);
             end else if baseTypClass.InheritsFrom(TBaseFloatSymbol) then begin
                paramRec.DefaultValue[0] := VariantToFloat(paramRec.DefaultValue[0]);
             end else if baseTypClass.InheritsFrom(TBaseBooleanSymbol) then begin
                paramRec.DefaultValue[0] := SameText(paramRec.DefaultValue[0], 'True');
+            end else if baseTypClass.InheritsFrom(TSetOfSymbol) then begin
+               ConvertSetOfdefaultValue(paramRec);
             end;
          end;
 
@@ -6431,8 +6459,12 @@ function TConstSymbol.GetDescription : String;
    var
       nbApos, nbQuotes : Integer;
    begin
+      var uTyp := Typ.UnAliasedType;
+      if uTyp is TSetOfSymbol then
+         Exit(TSetOfSymbol(uTyp).GetValueDescription(FDataContext));
+
       FDataContext.EvalAsString(0, Result);
-      if Typ.UnAliasedTypeIs(TBaseStringSymbol) then begin
+      if uTyp is TBaseStringSymbol then begin
          nbApos := StrCountChar(Result, '''');
          if nbApos = 0 then
             nbQuotes := 1
@@ -6678,6 +6710,8 @@ begin
          Result := Result + ' = ''' + VariantToString(FDefaultValue[0]) + ''''  // put quotes around value
       else if (Typ is TArraySymbol) then
          Result := Result + ' = []'
+      else if (Typ is TSetOfSymbol) then
+         Result := Result + ' = ' + TSetOfSymbol(Typ).GetValueDescription(FDefaultValue)
       else Result := Result + ' = ' + VariantToString(FDefaultValue[0]);
    end;
 end;
@@ -6843,13 +6877,6 @@ begin
    inherited;
 end;
 
-// GetCount
-//
-function TSymbolTable.GetCount : Integer;
-begin
-   Result:=FSymbols.Count
-end;
-
 // GetSymbol
 //
 function TSymbolTable.GetSymbol(index : Integer) : TSymbol;
@@ -6870,11 +6897,8 @@ end;
 // FindLocal
 //
 function TSymbolTable.FindLocal(const aName : String) : TSymbol;
-var
-   lo, hi, mid, cmpResult : Integer;
-   ptrList : PObjectTightList;
 begin
-   hi := FSymbols.Count-1;
+   var hi := FSymbols.Count-1;
    if hi < 0 then Exit(nil);
 
    if not (stfSorted in FFlags) then begin
@@ -6883,12 +6907,14 @@ begin
       Include(FFlags, stfSorted);
    end;
 
-   lo := 0;
-   ptrList := FSymbols.List;
+   var ptrList : PObjectTightList := FSymbols.List;
+   var lo := 0;
    while lo <= hi do begin
-      mid := (lo + hi) shr 1;
+      var mid := (lo + hi) shr 1;
+      {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
       Result := TSymbol(ptrList[mid]);
-      cmpResult := UnicodeCompareText(Result.Name, aName);
+      {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
+      var cmpResult := UnicodeCompareText(Result.Name, aName);
       if cmpResult < 0 then
          lo := mid+1
       else begin
@@ -7014,14 +7040,19 @@ end;
 //
 function TSymbolTable.EnumerateLocalSymbolsOfName(
       const aName : String; const callback : TSymbolEnumerationCallback) : Boolean;
-var
-   i : Integer;
-   sym : TSymbol;
 begin
    // TODO: optimize to take advantage of sorting
-   for i:=0 to Count-1 do begin
-      sym:=Symbols[i];
-      if UnicodeSameText(sym.Name, aName) then begin
+   var list := FSymbols.List;
+   var nameLen := Length(aName);
+   for var i := 0 to Count-1 do begin
+      {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
+      var sym := TSymbol(list[i]);
+      {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
+      if     (Length(sym.Name) = nameLen)
+         and (
+                  (nameLen = 0)
+              or  (UnicodeCompareLen(Pointer(sym.Name), Pointer(aName), nameLen) = 0)
+              ) then begin
          if callback(sym) then Exit(True);
       end;
    end;
@@ -7062,15 +7093,15 @@ end;
 //
 function TSymbolTable.EnumerateLocalHelpers(helpedType : TTypeSymbol; const callback : THelperSymbolEnumerationCallback) : Boolean;
 var
-   i : Integer;
-   sym : TSymbol;
    list : PObjectTightList;
 begin
    if stfHasHelpers in FFlags then begin
       list := FSymbols.List;
-      for i:=0 to FSymbols.Count-1 do begin
-         sym:=TSymbol(list[i]);
-         if sym.ClassType=THelperSymbol then
+      for var i := 0 to FSymbols.Count-1 do begin
+         {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
+         var sym := TSymbol(list[i]);
+         {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
+         if sym.ClassType = THelperSymbol then
             if THelperSymbol(sym).HelpsType(helpedType) then begin
                if callback(THelperSymbol(sym)) then Exit(True);
          end;
@@ -7281,6 +7312,13 @@ begin
    Result := stfHasClassSymbols in FFlags;
 end;
 
+// HasNestedtypes
+//
+function TSymbolTable.HasNestedtypes : Boolean;
+begin
+   Result := stfHasNestedTypes in FFlags;
+end;
+
 // IsUnitTable
 //
 class function TSymbolTable.IsUnitTable : Boolean;
@@ -7291,42 +7329,51 @@ end;
 // AddSymbol
 //
 function TSymbolTable.AddSymbol(sym : TSymbol) : Integer;
-var
-   ct : TClass;
 begin
    Result := AddSymbolDirect(sym);
    if sym.IsDataSymbol then begin
       if FAddrGenerator <> nil then
          TDataSymbol(sym).AllocateStackAddr(FAddrGenerator);
    end else begin
-      ct := sym.ClassType;
+      var ct := sym.ClassType;
       if ct = TOperatorSymbol then
          FFlags := FFlags + [ stfHasOperators, stfHasLocalOperators ]
       else if ct = TClassSymbol then
-         Include(FFlags, stfHasClassSymbols)
+         FFlags := FFlags + [ stfHasClassSymbols, stfHasNestedTypes ]
       else if ct = THelperSymbol then
-         Include(FFlags, stfHasHelpers);
+         FFlags := FFlags + [ stfHasHelpers, stfHasNestedTypes ]
+      else if (ct = TRecordSymbol) or (ct = TAliasSymbol) then
+         Include(FFlags, stfHasNestedTypes);
    end;
 end;
 
 // AddSymbolDirect
 //
 function TSymbolTable.AddSymbolDirect(sym : TSymbol) : Integer;
-var
-   n : Integer;
-   ptrList : PObjectTightList;
 begin
    if stfSorted in FFlags then begin
-      Result:=0;
-      n:=FSymbols.Count;
-      ptrList:=FSymbols.List;
-      while Result<n do begin
-         if UnicodeCompareText(TSymbol(ptrList[Result]).Name, Sym.Name)>=0 then
-            Break;
-         Inc(Result);
+
+      var ptrList : PObjectTightList := FSymbols.List;
+      Result := 0;
+      var hi := FSymbols.Count-1;
+      while Result <= hi do begin
+         var mid := (Result + hi) shr 1;
+         {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
+         var ptrMid := TSymbol(ptrList[mid]);
+         {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
+         var cmpResult := UnicodeCompareText(ptrMid.Name, sym.Name);
+         if cmpResult < 0 then
+            Result := mid+1
+         else begin
+            if cmpResult = 0 then begin
+               Result := mid;
+               break;
+            end else hi := mid-1;
+         end;
       end;
       FSymbols.Insert(Result, sym);
-   end else Result:=FSymbols.Add(sym);
+
+   end else Result := FSymbols.Add(sym);
 end;
 
 // Remove
@@ -7383,13 +7430,6 @@ end;
 procedure TSymbolTable.ClearParents;
 begin
    FParents.Clear;
-end;
-
-// GetParentCount
-//
-function TSymbolTable.GetParentCount: Integer;
-begin
-   Result := FParents.Count
 end;
 
 // GetParents
@@ -7508,11 +7548,10 @@ end;
 function TMembersSymbolTable.Visibilities : TdwsVisibilities;
 var
    sym : TSymbol;
-   symClass : TClass;
 begin
    Result:=[];
    for sym in Self do begin
-      symClass:=sym.ClassType;
+      var symClass := sym.ClassType;
       if symClass=TFieldSymbol then
          Include(Result, TFieldSymbol(sym).Visibility)
       else if symClass.InheritsFrom(TPropertySymbol) then
@@ -7679,6 +7718,34 @@ function TSetOfSymbol.ValueToByteOffsetMask(value : Integer; var mask : Byte) : 
 begin
    Result := (value-MinValue) shr 3;
    mask := 1 shl (value and 7);
+end;
+
+// GetValueDescription
+//
+function TSetOfSymbol.GetValueDescription(const value : IDataContext) : String;
+begin
+   Result := '';
+   for var i := 0 to Size-1 do begin
+      var v := UInt64(value.AsInteger[i]);
+      while v <> 0 do begin
+         for var j := 0 to 63 do begin
+            var bit := UInt64(1) shl j;
+            if (v and bit) <> 0 then begin
+               v :=  v - bit;
+               var elemValue := j + (i shl 6);
+               var elem := ElementByValue(elemValue);
+               if Result <> '' then
+                  Result := Result + ', ';
+               if elem <> nil then
+                  Result := Result + elem.StandardName
+               else Result := Result + Typ.Name + '(' + IntToStr(elemValue) + ')';
+            end;
+         end;
+      end;
+   end;
+   if Result = '' then
+      Result := '[]'
+   else Result := '[ ' + Result + ' ]';
 end;
 
 // ElementByValue
@@ -8873,17 +8940,18 @@ begin
    inherited;
 end;
 
+// DoDebug
+//
+class procedure TdwsExecution.DoDebug(exec : TdwsExecution; expr : TExprBase);
+begin
+   exec.Debugger.DoDebug(exec, expr);
+   if exec.ProgramState = psRunningStopped then
+      EScriptStopped.DoRaise(exec, expr);
+end;
+
 // DoStep
 //
 procedure TdwsExecution.DoStep(expr : TExprBase);
-
-   procedure DoDebug(exec : TdwsExecution; expr : TExprBase);
-   begin
-      exec.Debugger.DoDebug(exec, expr);
-      if exec.ProgramState=psRunningStopped then
-         EScriptStopped.DoRaise(exec, expr);
-   end;
-
 begin
    if ProgramState=psRunningStopped then
       EScriptStopped.DoRaise(Self, expr)
@@ -9122,6 +9190,13 @@ begin
    raise EScriptException.CreateFmt(RTE_UnauthorizedFilePath, [path]);
 end;
 
+// FileSystem
+//
+function TdwsExecution.FileSystem : IdwsFileSystemRW;
+begin
+   raise EScriptException.Create(RTE_UnauthorizedFileSystem);
+end;
+
 // DataContext_Create
 //
 procedure TdwsExecution.DataContext_Create(const data : TData; addr : Integer; var result : IDataContext);
@@ -9186,7 +9261,7 @@ end;
 //
 function TdwsExecution.GetStackPData : PData;
 begin
-   Result := FStack.GetPData;
+   Result := PData(IntPtr(@FStack) + TStackMixIn.vFDataOffset);
 end;
 
 // SuspendDebug
@@ -9344,11 +9419,9 @@ end;
 // GetCaption
 //
 function TOperatorSymbol.GetCaption : String;
-var
-   i : Integer;
 begin
    Result:='operator '+cTokenStrings[Token]+' (';
-   for i:=0 to High(Params) do begin
+   for var i := 0 to High(Params) do begin
       if i>0 then
          Result:=Result+', ';
       Result:=Result+Params[i].Typ.Caption;
@@ -9435,10 +9508,8 @@ end;
 // ComputeIndexes
 //
 procedure TResourceStringSymbolList.ComputeIndexes;
-var
-   i : Integer;
 begin
-   for i:=0 to Count-1 do
+   for var i := 0 to Count-1 do
       Items[i].Index:=i;
 end;
 
@@ -9449,22 +9520,18 @@ end;
 // ContainsChildMethodOf
 //
 function TFuncSymbolList.ContainsChildMethodOf(methSym : TMethodSymbol) : Boolean;
-var
-   i : Integer;
-   funcSym : TFuncSymbol;
-   meth : TMethodSymbol;
 begin
-   for i:=0 to Count-1 do begin
-      funcSym:=Items[i];
+   for var i := 0 to Count-1 do begin
+      var funcSym := Items[i];
       if funcSym is TMethodSymbol then begin
-         meth:=TMethodSymbol(funcSym);
+         var meth := TMethodSymbol(funcSym);
          repeat
-            if meth=methSym then Exit(True);
-            meth:=meth.ParentMeth;
-         until meth=nil;
+            if meth = methSym then Exit(True);
+            meth := meth.ParentMeth;
+         until meth = nil;
       end;
    end;
-   Result:=False;
+   Result := False;
 end;
 
 // ------------------
@@ -9507,12 +9574,10 @@ end;
 // CreateSelfParameter
 //
 function THelperSymbol.CreateSelfParameter(methSym : TMethodSymbol) : TDataSymbol;
-var
-   meta : TStructuredTypeMetaSymbol;
 begin
    if methSym.IsClassMethod then begin
       if ForType is TStructuredTypeSymbol then begin
-         meta:=TStructuredTypeSymbol(ForType).MetaSymbol;
+         var meta :=TStructuredTypeSymbol(ForType).MetaSymbol;
          if meta<>nil then
             Result:=TParamSymbol.Create(SYS_SELF, meta)
          else Result:=nil;

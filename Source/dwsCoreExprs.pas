@@ -25,11 +25,8 @@ interface
 
 uses
    System.Classes, System.SysUtils, System.Variants,
-   dwsUtils, dwsXPlatform, dwsUnicode,
-   dwsDataContext, dwsCompilerContext, dwsExprList,
-   dwsSymbols, dwsErrors, dwsStrings, dwsConvExprs,
-   dwsStack, dwsExprs, dwsScriptSource,
-   dwsConstExprs, dwsTokenTypes, dwsUnitSymbols;
+   dwsUtils,  dwsUnicode, dwsDataContext, dwsCompilerContext, dwsExprList,
+   dwsSymbols, dwsStack, dwsExprs, dwsScriptSource, dwsTokenTypes;
 
 type
 
@@ -83,7 +80,7 @@ type
          procedure AssignValue(exec : TdwsExecution; const Value: Variant); override;
          procedure AssignValueAsInteger(exec : TdwsExecution; const Value: Int64); override;
 
-         procedure IncValue(exec : TdwsExecution; const value: Int64);
+         function IncValue(exec : TdwsExecution; delta : Int64) : Int64; override;
 
          function  EvalAsInteger(exec : TdwsExecution) : Int64; override;
          function  EvalAsFloat(exec : TdwsExecution) : Double; override;
@@ -365,11 +362,14 @@ type
          property Addr : Integer read FAddr;
    end;
 
+   TFieldExprReadOnlyState = ( feroDefault, feroWriteable, feroReadOnly );
+
    // Field expression: obj.Field
    TFieldExpr = class(TDataExpr)
       protected
          FObjectExpr : TTypedExpr;
          FFieldSym : TFieldSymbol;
+         FReadOnly : TFieldExprReadOnlyState;
 
          function GetSubExpr(i : Integer) : TExprBase; override;
          function GetSubExprCount : Integer; override;
@@ -378,7 +378,8 @@ type
 
       public
          constructor Create(const aScriptPos: TScriptPos;
-                            fieldSym : TFieldSymbol; objExpr: TTypedExpr);
+                            fieldSym : TFieldSymbol; objExpr: TTypedExpr;
+                            readOnly : TFieldExprReadOnlyState);
          destructor Destroy; override;
 
          procedure AssignValueAsInteger(exec : TdwsExecution; const value : Int64); override;
@@ -401,8 +402,11 @@ type
 
          function SameDataExpr(expr : TTypedExpr) : Boolean; override;
 
+         function IsWritable : Boolean; override;
+
          property ObjectExpr : TTypedExpr read FObjectExpr;
          property FieldSym : TFieldSymbol read FFieldSym;
+         property ReadOnlyState : TFieldExprReadOnlyState read FReadOnly;
    end;
 
    // Field expression: obj.Field
@@ -423,17 +427,6 @@ type
          procedure Append(exec : TdwsExecution; const value : String);
 
          procedure GetDataPtr(exec : TdwsExecution; var result : IDataContext); override;
-
-         function SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr; override;
-   end;
-
-   TReadOnlyFieldExpr = class sealed (TFieldExpr)
-      public
-         constructor Create(const aScriptPos: TScriptPos;
-                            fieldSym : TFieldSymbol; objExpr: TTypedExpr;
-                            propertyType : TTypeSymbol);
-
-         function IsWritable: Boolean; override;
 
          function SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr; override;
    end;
@@ -1721,7 +1714,7 @@ type
 
          procedure AddDoExpr(expr : TExceptDoExpr);
          property DoExpr[i : Integer] : TExceptDoExpr read GetDoExpr;
-         function DoExprCount : Integer;
+         property DoExprCount : Integer read FDoExprs.FCount;
 
          procedure EnumerateSteppableExprs(const callback : TExprBaseProc); override;
 
@@ -1848,8 +1841,9 @@ implementation
 // ------------------------------------------------------------------
 
 uses
+   dwsXPlatform, dwsStrings, dwsErrors, dwsConvExprs, dwsConstExprs,
    dwsStringFunctions, dwsExternalSymbols, dwsSpecializationContext,
-   dwsCompilerUtils, dwsDynamicArrays;
+   dwsCompilerUtils, dwsDynamicArrays, dwsUnitSymbols;
 
 // ------------------
 // ------------------ TVarExpr ------------------
@@ -2072,9 +2066,9 @@ end;
 
 // IncValue
 //
-procedure TIntVarExpr.IncValue(exec : TdwsExecution; const value: Int64);
+function TIntVarExpr.IncValue(exec : TdwsExecution; delta : Int64) : Int64;
 begin
-   exec.Stack.IncIntValue_BaseRelative(FStackAddr, value);
+   Result := exec.Stack.IncIntValue_BaseRelative(FStackAddr, delta);
 end;
 
 // EvalAsInteger
@@ -2351,7 +2345,7 @@ end;
 //
 function TVarParentExpr.EvalAsInteger(exec : TdwsExecution) : Int64;
 begin
-   VariantToInt64(exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr], Result);
+   Result := VariantToInt64(exec.Stack.Data[exec.Stack.GetSavedBp(FLevel)+FStackAddr]);
 end;
 
 // EvalAsFloat
@@ -2769,7 +2763,7 @@ end;
 //
 function TRecordExpr.IsWritable : Boolean;
 begin
-   Result:=FBaseExpr.IsWritable and not FieldSymbol.StructSymbol.IsImmutable;
+   Result := FBaseExpr.IsWritable and not FieldSymbol.StructSymbol.IsImmutable;
 end;
 
 // ------------------
@@ -2988,11 +2982,13 @@ end;
 // Create
 //
 constructor TFieldExpr.Create(const aScriptPos: TScriptPos;
-                              fieldSym: TFieldSymbol; objExpr: TTypedExpr);
+                              fieldSym: TFieldSymbol; objExpr: TTypedExpr;
+                              readOnly : TFieldExprReadOnlyState);
 begin
    inherited Create(aScriptPos, fieldSym.Typ);
    FObjectExpr := objExpr;
    FFieldSym := fieldSym;
+   FReadOnly := readOnly;
 end;
 
 // Destroy
@@ -3074,6 +3070,18 @@ begin
    Result:=    (ClassType=expr.ClassType)
            and (FieldSym=TFieldExpr(expr).FieldSym)
            and ObjectExpr.SameDataExpr(TFieldExpr(expr).ObjectExpr);
+end;
+
+// IsWritable
+//
+function TFieldExpr.IsWritable : Boolean;
+begin
+   case FReadOnly of
+      feroWriteable : Result := True;
+      feroReadOnly : Result := False;
+   else
+      Result := not FieldSym.ReadOnly;
+   end;
 end;
 
 // EvalAsString
@@ -3223,37 +3231,7 @@ end;
 function TFieldVarExpr.SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr;
 begin
    Result := TFieldVarExpr.Create(ScriptPos, context.SpecializeField(FieldSym),
-                                  ObjectExpr.SpecializeTypedExpr(context));
-end;
-
-// ------------------
-// ------------------ TReadOnlyFieldExpr ------------------
-// ------------------
-
-// Create
-//
-constructor TReadOnlyFieldExpr.Create(const aScriptPos: TScriptPos;
-                         fieldSym : TFieldSymbol; objExpr: TTypedExpr;
-                         propertyType : TTypeSymbol);
-begin
-   inherited Create(aScriptPos, fieldSym, objExpr);
-   Typ := propertyType;
-end;
-
-// IsWritable
-//
-function TReadOnlyFieldExpr.IsWritable: Boolean;
-begin
-   Result := False;
-end;
-
-// SpecializeDataExpr
-//
-function TReadOnlyFieldExpr.SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr;
-begin
-   Result := TReadOnlyFieldExpr.Create(ScriptPos, context.SpecializeField(FieldSym),
-                                       ObjectExpr.SpecializeTypedExpr(context),
-                                       context.SpecializeType(Typ));
+                                  ObjectExpr.SpecializeTypedExpr(context), FReadOnly);
 end;
 
 // ------------------
@@ -3468,10 +3446,7 @@ function TInOpExpr.Optimize(context : TdwsCompilerContext) : TProgramExpr;
    end;
 
 var
-   i : Integer;
    mask : UInt64;
-   cc : TCaseCondition;
-   iioe : TIntegerInOpExpr;
 begin
    Result := Self;
 
@@ -3480,8 +3455,8 @@ begin
       // all case conditions are constanst and in the 0..31 range (31 is limit for JS)
       // then it can be optimized to a bitwise test
       mask := 0;
-      for i := 0 to FCaseConditions.Count-1 do begin
-         cc := TCaseCondition(FCaseConditions.List[i]);
+      for var i := 0 to FCaseConditions.Count-1 do begin
+         var cc := TCaseCondition(FCaseConditions.List[i]);
          if not cc.ApplyToConstantMask(mask) then begin
             mask := 0;
             Break;
@@ -3496,7 +3471,7 @@ begin
       end;
 
       if TCaseConditionsHelper.CanOptimizeToTyped(FCaseConditions, TConstIntExpr) then begin
-         iioe := TIntegerInOpExpr.Create(context, Left);
+         var iioe := TIntegerInOpExpr.Create(context, Left);
          TransferFieldsAndOrphan(iioe);
          Exit(iioe);
       end;
@@ -3670,13 +3645,12 @@ end;
 //
 function TIntegerInOpExpr.EvalAsBoolean(exec : TdwsExecution) : Boolean;
 var
-   i : Integer;
    value : Int64;
    cc : TCaseCondition;
 begin
    value:=FLeft.EvalAsInteger(exec);
-   for i:=0 to FCaseConditions.Count-1 do begin
-      cc:=TCaseCondition(FCaseConditions.List[i]);
+   for var i := 0 to FCaseConditions.Count-1 do begin
+      cc := TCaseCondition(FCaseConditions.List[i]);
       if cc.IntegerIsTrue(value) then
          Exit(True);
    end;
@@ -6225,7 +6199,8 @@ end;
 constructor TBlockExpr.Create(context : TdwsCompilerContext; const aScriptPos: TScriptPos);
 begin
    inherited Create(aScriptPos);
-   FTable:=TSymbolTable.Create(context.Table, context.Table.AddrGenerator);
+   var contextTable := context.Table;
+   FTable := TSymbolTable.Create(contextTable, contextTable.AddrGenerator);
 end;
 
 // Destroy
@@ -6249,15 +6224,14 @@ end;
 //
 procedure TBlockExpr.EvalNoResult(exec : TdwsExecution);
 var
-   i : Integer;
    expr : PProgramExpr;
 begin
-   expr:=@FStatements[0];
+   expr := @FStatements[0];
    try
-      for i:=1 to FCount do begin
+      for var i := FCount downto 1 do begin
          exec.DoStep(expr^);
          expr.EvalNoResult(exec);
-         if exec.Status<>esrNone then Break;
+         if exec.Status <> esrNone then Break;
          Inc(expr);
       end;
    except
@@ -6269,13 +6243,11 @@ end;
 // Optimize
 //
 function TBlockExpr.Optimize(context : TdwsCompilerContext) : TProgramExpr;
-var
-   i : Integer;
 begin
    if FTable.HasChildTables then
       Exit(Self);
 
-   for i:=FCount-1 downto 0 do begin
+   for var i := FCount-1 downto 0 do begin
       if FStatements[i].ClassType=TNullExpr then begin
          FStatements[i].Free;
          if i+1<FCount then
@@ -7831,13 +7803,6 @@ end;
 procedure TExceptExpr.AddDoExpr(expr : TExceptDoExpr);
 begin
    FDoExprs.Add(expr);
-end;
-
-// DoExprCount
-//
-function TExceptExpr.DoExprCount : Integer;
-begin
-   Result:=FDoExprs.Count;
 end;
 
 // EnumerateSteppableExprs

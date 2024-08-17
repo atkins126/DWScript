@@ -21,7 +21,7 @@ unit dwsCompilerUtils;
 interface
 
 uses
-   SysUtils, TypInfo,
+   System.SysUtils, System.TypInfo,
    dwsErrors, dwsStrings, dwsXPlatform, dwsUtils, dwsScriptSource,
    dwsSymbols, dwsUnitSymbols, dwsCompilerContext, dwsExprList,
    dwsExprs, dwsCoreExprs, dwsConstExprs, dwsMethodExprs, dwsMagicExprs,
@@ -39,7 +39,8 @@ type
          class function WrapWithImplicitConversion(
                         context : TdwsCompilerContext; expr : TTypedExpr; toTyp : TTypeSymbol;
                         const hotPos : TScriptPos;
-                        const msg : String = CPE_IncompatibleTypes) : TTypedExpr; static;
+                        const msg : String = CPE_IncompatibleTypes;
+                        ignoreUnsupportedConversions : Boolean = False) : TTypedExpr; static;
 
          class function CanConvertArrayToSetOf(context : TdwsCompilerContext;
                                                expr : TTypedExpr; setOf : TSetOfSymbol) : Boolean;
@@ -376,14 +377,14 @@ begin
          Result:=CreateMethodExpr(context, TMethodSymbol(funcSym),
                                   instanceExpr, rkObjRef, aScriptPos, options)
       end else if structSym<>nil then begin
-         instanceExpr:=TConstExpr.CreateValue(aScriptPos, structSym.MetaSymbol, Int64(structSym));
+         instanceExpr := TConstIntExpr.Create(aScriptPos, structSym.MetaSymbol, Int64(structSym));
          Result:=CreateMethodExpr(context, TMethodSymbol(funcSym),
                                   instanceExpr, rkClassOfRef, aScriptPos, options)
       end else begin
          // static method
          structSym:=TMethodSymbol(funcSym).StructSymbol;
          if structSym is TStructuredTypeSymbol then begin
-            instanceExpr:=TConstExpr.CreateValue(aScriptPos, structSym.MetaSymbol, Int64(structSym));
+            instanceExpr := TConstIntExpr.Create(aScriptPos, structSym.MetaSymbol, Int64(structSym));
             Result:=CreateMethodExpr(context, TMethodSymbol(funcSym),
                                      instanceExpr, rkClassOfRef, aScriptPos, options)
          end else begin
@@ -1010,7 +1011,8 @@ end;
 class function CompilerUtils.WrapWithImplicitConversion(
       context : TdwsCompilerContext; expr : TTypedExpr; toTyp : TTypeSymbol;
       const hotPos : TScriptPos;
-      const msg : String = CPE_IncompatibleTypes) : TTypedExpr;
+      const msg : String = CPE_IncompatibleTypes;
+      ignoreUnsupportedConversions : Boolean = False) : TTypedExpr;
 var
    exprTyp : TTypeSymbol;
 begin
@@ -1040,6 +1042,14 @@ begin
 
       Result := TConstNilExpr.Create(expr.ScriptPos, toTyp);
       expr.Free;
+
+   end else if toTyp.IsOfType(context.TypVariant) then begin
+
+      Result := TConvExpr.WrapWithConvCast(context, hotPos, toTyp, expr, msg);
+
+   end else if ignoreUnsupportedConversions then begin
+
+      Result := expr;
 
    end else begin
 

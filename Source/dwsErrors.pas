@@ -25,7 +25,7 @@ interface
 
 uses
    System.Classes, System.SysUtils,
-   dwsStrings, dwsUtils, dwsScriptSource, dwsXPlatform, dwsJSON;
+   dwsUtils, dwsScriptSource, dwsJSON;
 
 type
 
@@ -178,7 +178,6 @@ type
 
       protected
          function GetMsg(Index: Integer): TdwsMessage;
-         function GetMsgCount : Integer; inline;
          function GetHasErrors : Boolean; inline;
 
          function GetSourceFile(const scriptPos : TScriptPos) : TSourceFile;
@@ -201,7 +200,7 @@ type
          procedure WriteJSONValue(writer : TdwsJSONWriter);
 
          property Msgs[index : Integer] : TdwsMessage read GetMsg; default;
-         property Count : Integer read GetMsgCount;
+         property Count : Integer read FMessageList.FCount;
          property HasErrors : Boolean read GetHasErrors;
          property State : TdwsMessageListState read FState write FState;
 
@@ -326,6 +325,8 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
+uses dwsStrings;
+
 // ------------------
 // ------------------ ECompileException ------------------
 // ------------------
@@ -405,13 +406,6 @@ end;
 function TdwsMessageList.GetMsg(Index: Integer): TdwsMessage;
 begin
    Result:=TdwsMessage(FMessageList.List[Index]);
-end;
-
-// GetMsgCount
-//
-function TdwsMessageList.GetMsgCount: Integer;
-begin
-   Result:=FMessageList.Count;
 end;
 
 // GetHasErrors
@@ -806,7 +800,7 @@ end;
 function TdwsCompileMessageList.AddCompilerError(const aScriptPos: TScriptPos;
       const Text: String; messageClass : TScriptMessageClass) : TScriptMessage;
 begin
-   Result:=messageClass.Create(Self, Text, aScriptPos);
+   Result := messageClass.Create(Self, Text, aScriptPos);
 end;
 
 // AddCompilerError

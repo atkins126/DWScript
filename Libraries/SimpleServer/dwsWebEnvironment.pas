@@ -20,10 +20,8 @@ interface
 
 
 uses
-   System.Classes, System.SysUtils, System.StrUtils, System.DateUtils,
-   SynCrtSock, SynCommons,
-   dwsExprs, dwsUtils, dwsWebUtils, dwsWebServerUtils, dwsWebServerHelpers,
-   dwsSymbols, dwsExprList, dwsXPlatform, dwsWebEnvironmentTypes;
+   System.Classes, System.SysUtils,
+   dwsExprs, dwsUtils, dwsSymbols, dwsExprList, dwsXPlatform, dwsWebEnvironmentTypes;
 
 type
    TWebServerEventData = array of RawByteString;
@@ -124,6 +122,7 @@ type
          SameSite : TWebResponseCookieSameSite;
 
          procedure WriteStringLn(dest : TWriteOnlyBlockStream);
+         function AsHeader : RawByteString;
    end;
 
    TWebResponseCookies = class (TObjectList<TWebResponseCookie>)
@@ -142,7 +141,7 @@ type
          FContentEncoding : RawByteString;
          FHeaders : TStrings;
          FCookies : TWebResponseCookies;  // lazy initialization
-         FProcessingTime : Integer;
+         FProcessingTime : Int64;
          FHints : TWebResponseHints;
 
       protected
@@ -181,7 +180,7 @@ type
          property Hints : TWebResponseHints read FHints write FHints;
 
          // optional, informative, time it took to process the response in microseconds
-         property ProcessingTime : Integer read FProcessingTime write FProcessingTime;
+         property ProcessingTime : Int64 read FProcessingTime write FProcessingTime;
    end;
 
    IWebEnvironment = interface
@@ -280,6 +279,8 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
+
+uses System.DateUtils, dwsWebServerHelpers, dwsWebServerUtils, dwsWebUtils;
 
 // ------------------
 // ------------------ TWebEnvironmentHelper ------------------
@@ -410,8 +411,8 @@ begin
    cookieField:=Header('Cookie');
    base:=1;
    while True do begin
-      p := System.StrUtils.PosEx('=', cookieField, base);
-      next := System.StrUtils.PosEx(';', cookieField, p);
+      p := Pos('=', cookieField, base);
+      next := Pos(';', cookieField, p);
       if (p>base) and (next>p) then begin
          AddCookie(System.SysUtils.Trim(Copy(cookieField, base, p-base)), Copy(cookieField, p+1, pred(next-p)));
          base:=next+1;
@@ -802,6 +803,20 @@ begin
    end;
 
    dest.WriteCRLF;
+end;
+
+// AsHeader
+//
+function TWebResponseCookie.AsHeader : RawByteString;
+begin
+   var wobs := TWriteOnlyBlockStream.AllocFromPool;
+   try
+      WriteStringLn(wobs);
+      Result := wobs.ToUTF8String;
+      SetLength(Result, Length(Result)-2); // strip tail CRLF
+   finally
+      wobs.ReturnToPool;
+   end;
 end;
 
 // ------------------

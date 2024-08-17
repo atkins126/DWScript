@@ -21,7 +21,7 @@ unit dwsDataContext;
 interface
 
 uses
-   dwsXPlatform, dwsUtils, dwsXXHash;
+   dwsUtils;
 
 type
 
@@ -219,10 +219,18 @@ type
 
    TGetPDataFunc = function : PData of object;
 
-   TRelativeDataContext = class (TInterfacedObject, IDataContext, IGetSelf)
+   TRelativeDataContext = class (TObject, IDataContext, IGetSelf)
       private
+         FRefCount : Integer;
          FGetPData : TGetPDataFunc;
          FAddr : NativeInt;
+
+      protected
+         function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
+         function _AddRef: Integer; stdcall;
+         function _Release: Integer; stdcall;
+
+         property RefCount : Integer read FRefCount;
 
       public
          constructor Create(const getPData : TGetPDataFunc; addr : NativeInt);
@@ -308,7 +316,7 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses Variants;
+uses System.Variants, dwsXXHash;
 
 // DWSCopyPVariants
 //
@@ -549,8 +557,8 @@ begin
    else begin
       ref.FNext:=FHead;
       FHead:=ref;
-      ref.FData:=nil;
       ref.FAddr:=0;
+      ref.FData:=nil;
    end;
 end;
 
@@ -658,7 +666,7 @@ begin
    p:=@FData[FAddr+addr];
    if p^.VType=varInt64 then
       Result:=p^.VInt64
-   else VariantToInt64(PVariant(p)^, Result);
+   else Result := VariantToInt64(PVariant(p)^);
 end;
 
 // SetAsInteger
@@ -789,9 +797,11 @@ end;
 //
 function TDataContext._Release: Integer;
 begin
-   Result := AtomicDecrement(FRefCount);
-   if Result = 0 then
+   if FRefCount = 1 then begin
+      FRefCount := 0;
       FPool.Push(Self);
+      Result := 0;
+   end else Result := AtomicDecrement(FRefCount);
 end;
 
 // AfterConstruction
@@ -1191,6 +1201,34 @@ begin
    Result:=Self;
 end;
 
+// QueryInterface
+//
+function TRelativeDataContext.QueryInterface(const IID: TGUID; out Obj): HResult;
+begin
+   if GetInterface(IID, Obj) then
+      Result := 0
+   else Result := E_NOINTERFACE;
+end;
+
+// _AddRef
+//
+function TRelativeDataContext._AddRef: Integer;
+begin
+   Inc(FRefCount);
+   Result := FRefCount;
+end;
+
+// _Release
+//
+function TRelativeDataContext._Release: Integer;
+begin
+   Dec(FRefCount);
+   if FRefCount = 0 then begin
+      Destroy;
+      Result := 0;
+   end else Result := FRefCount;
+end;
+
 // ScriptTypeName
 //
 function TRelativeDataContext.ScriptTypeName : String;
@@ -1215,8 +1253,13 @@ end;
 // GetAsInteger
 //
 function TRelativeDataContext.GetAsInteger(addr : NativeInt) : Int64;
+var
+   p : PVarData;
 begin
-   VariantToInt64( FGetPData^[FAddr+addr], Result );
+   p := @FGetPData^[FAddr+addr];
+   if p.VType = varInt64 then
+      Result := p.VInt64
+   else Result := VariantToInt64(FGetPData^[FAddr+addr]);
 end;
 
 // SetAsInteger

@@ -108,13 +108,13 @@ const
 const
 
   // Missing Tokens
-  CPE_XxxExpected = ' expected.';
-  CPE_Unexpected_X = 'Unexpected "%s".';
-  CPE_X_ExpectedBut_Y_Found = '%s expected but %s found.';
-  CPE_CommaExpected = '"," expected.';
-  CPE_SemiExpected = '";" expected.';
-  CPE_BrackLeftExpected = '"(" expected.';
-  CPE_BrackRightExpected = '")" expected.';
+  CPE_XxxExpected = ' expected';
+  CPE_Unexpected_X = 'Unexpected "%s"';
+  CPE_X_ExpectedBut_Y_Found = '%s expected but %s found';
+  CPE_CommaExpected = '"," expected';
+  CPE_SemiExpected = '";" expected';
+  CPE_BrackLeftExpected = '"(" expected';
+  CPE_BrackRightExpected = '")" expected';
   CPE_ArrayBracketRightExpected = '"]" expected';
   CPE_ArrayBracketLeftExpected = '"[" expected';
   CPE_AtExpected = '"@" expected';
@@ -213,6 +213,7 @@ const
   CPE_WriteOnlyProperty = 'Cannot read a write only property';
   CPE_ReadOnlyProperty = 'Cannot set a value for a read-only property';
   CPE_CantReadProperty = 'Property cannot be read-accessed';
+  CPE_FieldIsReadOnly = 'Field "%s" is readonly';
   CPE_ObjectReferenceExpected = 'Object reference needed to read/write an object field';
   CPE_StaticPropertyWriteExpected = 'Write access of property should be a static method';
   CPE_StaticPropertyReadExpected = 'Read access of property should be a static method';
@@ -400,11 +401,15 @@ const
 
   CPH_CallConventionIsNotSupportedAndIgnored = 'Call convention "%s" is not supported and ignored';
 
+  CPH_ReintroducedPropertyBrackets = 'Property "%s" reintroduced a method, you should remove empty brackets ()';
+
   CPH_UnnamedEnumerationElement = 'Enumeration element is unnamed or out of range';
 
   CPH_EmptyThenBlock = 'Empty THEN block';
   CPH_EmptyElseBlock = 'Empty ELSE block';
   CPH_BeginInCaseOfElseClause = 'Redundant "begin" in clause of a case..of';
+
+  CPH_CaseRangeLowerBoundIsGreaterThanHigherBound = 'Case range condition lower bound is greater than higher bound';
 
   // TypeCheck
   CPE_BooleanExpected = 'Boolean expected';
@@ -448,6 +453,7 @@ const
 
   // Others
   CPE_CompilationAborted = 'Compilation aborted';
+  CPE_RecompileInContextDoesntSupportUnits = 'RecompileInContect does not support units';
 
   CPE_ConstantExpressionExpected = 'Constant expression expected';
   CPE_IntegerExpressionExpected = 'Integer expression expected';
@@ -520,7 +526,7 @@ const
   CPE_DivisionByZero = 'Division by zero';
 
   // Contracts
-  CPE_PreconditionsMustBeInRootMethod = 'Preconditions must be defined in the root method only.';
+  CPE_PreconditionsMustBeInRootMethod = 'Preconditions must be defined in the root method only';
 
   // Units
   CPE_UnitExpected = '"unit" expected';
@@ -528,8 +534,8 @@ const
   CPE_UnitNameDoesntMatch = 'Unit name does not match file name';
   CPH_UnitNameCaseDoesntMatch = 'Unit name case does not match file name';
   CPE_UnitCircularReference = 'Circular referencing units detected';
-  CPE_FilterDependsOnUnit = 'The filter "%s" depends on unit "%s" that is not available.';
-  CPE_ResultTypeDependsOnUnit = 'The result-type "%s" depends on unit "%s" that is not available.';
+  CPE_FilterDependsOnUnit = 'The filter "%s" depends on unit "%s" that is not available';
+  CPE_ResultTypeDependsOnUnit = 'The result-type "%s" depends on unit "%s" that is not available';
   CPE_NoStaticSymbols = 'Invalid use of static symbols';
 
   // Filter
@@ -537,7 +543,7 @@ const
 
   // TOKENIZER ERRORS
   TOK_InvalidChar = 'Invalid character';
-  TOK_EqualityExpected = '"=" expected.';
+  TOK_EqualityExpected = '"=" expected';
   TOK_NumberExpected = 'Number expected';
   TOK_HexDigitExpected = 'Hexadecimal digit expected';
   TOK_BinDigitExpected = 'Binary digit expected';
@@ -547,6 +553,8 @@ const
   TOK_GreaterEqualityExpected = '">" or "=" expected';
   TOK_StringTerminationError = 'End of string constant not found (end of line)';
   TOK_HereDocTerminationError = 'End of string constant not found (end of file)';
+  TOK_TripleAposStringError = 'Incorrect triple apostrophe string';
+  TOK_TripleAposStringIndentError = 'Incorrect triple apostrophe string indentation';
   TOK_InvalidHexConstant = 'Invalid hexadecimal constant "%s"';
   TOK_InvalidCharConstant = 'Invalid char constant "%s"';
   TOK_InvalidIntegerConstant = 'Invalid integer constant "%s"';
@@ -576,10 +584,10 @@ const
   RTE_CantRunScript = 'Script compiled with errors. Cannot execute';
   RTE_ScriptAlreadyRunning = 'Script is already running';
   RTE_ScriptStillRunning = 'Script is still running';
-  RTE_ScriptStopped = 'Script was stopped.';
+  RTE_ScriptStopped = 'Script was stopped';
   RTE_ScriptHasLiveExecutions = 'Script has %d live executions';
-  RTE_StateInitializedExpected = 'ProgramState "psInitialized" expected.';
-  RTE_StateReadyToRunExpected = 'ProgramState "psReadyToRun" expected.';
+  RTE_StateInitializedExpected = 'ProgramState "psInitialized" expected';
+  RTE_StateReadyToRunExpected = 'ProgramState "psReadyToRun" expected';
 
   RTE_InstanceOfAbstractClass = 'Trying to create an instance of an abstract class';
   RTE_ArrayUpperBoundExceeded = 'Upper bound exceeded! Index %d';
@@ -618,6 +626,7 @@ const
   RTE_UnHandledExternalCall = 'Unhandled call to external symbol "%s" from%s';
 
   RTE_UnauthorizedFilePath = 'Unauthorized file path: "%s"';
+  RTE_UnauthorizedFileSystem = 'Unauthorized file system access';
 
   // Connectors
   RTE_ConnectorCallFailed = 'Connector Call "%s" failed';

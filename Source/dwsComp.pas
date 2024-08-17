@@ -24,11 +24,10 @@ unit dwsComp;
 interface
 
 uses
-  System.Classes, System.SysUtils, System.TypInfo, System.Variants,
+  System.Classes, System.TypInfo, System.SysUtils,
   dwsCompiler, dwsExprs, dwsSymbols, dwsDataContext, dwsExprList, dwsScriptSource,
-  dwsStack, dwsFunctions, dwsStrings, dwsLanguageExtension, dwsCompilerContext,
-  dwsTokenTypes, dwsTokenizer, dwsUtils, dwsOperators, dwsUnitSymbols,
-  dwsXPlatform, dwsUnicode,
+  dwsFunctions, dwsLanguageExtension, dwsCompilerContext, dwsTokenTypes,
+  dwsUtils, dwsOperators, dwsUnitSymbols, dwsXPlatform,
   // Built-In functions
 {$IFNDEF DWS_NO_BUILTIN_FUNCTIONS}
   dwsMathFunctions, dwsStringFunctions, dwsTimeFunctions, dwsVariantFunctions,
@@ -65,6 +64,7 @@ type
       private
          procedure BeforeAdditionTo(dwscript : TObject);
          function GetUnitName: String;
+         function SameUnitName(const aName : String) : Boolean;
          function GetDependencies : TStringList;
          function GetUnitTable(systemTable : TSystemSymbolTable;
                                unitSyms : TUnitMainSymbols;
@@ -75,7 +75,7 @@ type
 
       protected
          FUnitName : String;
-         FDependencies : TStringList;
+         FDependencies : TFastCompareTextList;
          procedure AddUnitSymbols(SymbolTable: TSymbolTable); virtual; abstract;
 
          function  GetSelf : TObject;
@@ -204,9 +204,9 @@ type
    //
    TdwsAbstractUnit = class(TComponent, IUnknown, IdwsUnit, IdwsUnitTableFactory)
       private
-         FDependencies : TStringList;
-         FScript : TDelphiWebScript;
          FUnitName : String;
+         FDependencies : TFastCompareTextList;
+         FScript : TDelphiWebScript;
          FDeprecatedMessage : String;
          FImplicitUse : Boolean;
 
@@ -220,6 +220,7 @@ type
          procedure BeforeAdditionTo(dwscript : TObject);
          function GetSelf : TObject;
          function GetUnitName: String;
+         function SameUnitName(const aName : String) : Boolean;
          function GetUnitTable(systemTable : TSystemSymbolTable; unitSyms : TUnitMainSymbols;
                                operators : TOperators; rootTable : TSymbolTable) : TUnitSymbolTable; virtual; abstract;
          function GetUnitFlags : TIdwsUnitFlags;
@@ -668,6 +669,7 @@ type
          FIsDefault: Boolean;
          FIndexType: TDataType;
          FVisibility : TdwsVisibility;
+         FIsReintroduce : Boolean;
 
          procedure SetReadAccess(const Value: String);
          procedure SetWriteAccess(const Value: String);
@@ -696,6 +698,7 @@ type
          property WriteAccess: String read FWriteAccess write SetWriteAccess;
          property Parameters: TdwsParameters read FParameters write SetParameters stored StoreParameters;
          property IsDefault: Boolean read GetIsDefault write SetIsDefault default False;
+         property IsReintroduce : Boolean read FIsReintroduce write FIsReintroduce default False;
          property IndexType: TDataType read FIndexType write FIndexType;
          property IndexValue: Variant read FIndexValue write FIndexValue;
    end;
@@ -1028,6 +1031,7 @@ type
    TdwsMember = class(TdwsVariable)
       private
          FVisibility : TdwsVisibility;
+         FReadOnly : Boolean;
 
       public
          constructor Create(Collection: TCollection); override;
@@ -1037,6 +1041,7 @@ type
 
       published
          property Visibility : TdwsVisibility read FVisibility write FVisibility default cvPublic;
+         property ReadOnly : Boolean read FReadOnly write FReadOnly;
    end;
 
    TdwsMembers = class(TdwsCollection)
@@ -1515,7 +1520,8 @@ implementation
 // ------------------------------------------------------------------
 
 uses
-  dwsPascalTokenizer;
+   System.Variants,
+   dwsPascalTokenizer, dwsStack, dwsStrings, dwsTokenizer;
 
 type
    EGenerationError = class(Exception);
@@ -1722,6 +1728,7 @@ begin
       c.StaticExtensionSymbols:=FExtensions.StaticSymbols;
       c.OnCreateBaseVariantSymbol:=FExtensions.CreateBaseVariantSymbol;
       c.OnCreateSystemSymbols:=FExtensions.CreateSystemSymbols;
+      c.OnRegisterSystemOperators:=FExtensions.RegisterSystemOperators;
       c.OnReadInstr:=FExtensions.ReadInstr;
       c.OnReadInstrSwitch:=FExtensions.ReadInstrSwitch;
       c.OnFindUnknownName:=FExtensions.FindUnknownName;
@@ -1735,6 +1742,7 @@ begin
       c.StaticExtensionSymbols:=True;
       c.OnCreateBaseVariantSymbol:=nil;
       c.OnCreateSystemSymbols:=nil;
+      c.OnRegisterSystemOperators:=nil;
       c.OnReadInstr:=nil;
       c.OnReadInstrSwitch:=nil;
       c.OnFindUnknownName:=nil;
@@ -4385,9 +4393,12 @@ end;
 
 function TdwsMember.DoGenerate(systemTable : TSystemSymbolTable; Table: TSymbolTable; ParentSym: TSymbol = nil): TSymbol;
 begin
-  FIsGenerating := True;
-  CheckName(TRecordSymbol(ParentSym).Members, Name);
-  Result := TFieldSymbol.Create(Name, GetDataType(systemTable, Table, DataType), Visibility);
+   FIsGenerating := True;
+   CheckName(TRecordSymbol(ParentSym).Members, Name);
+   var fieldType := GetDataType(systemTable, Table, DataType);
+   var fieldSym := TFieldSymbol.Create(Name, fieldType, Visibility);
+   fieldSym.ReadOnly := ReadOnly;
+   Result := fieldSym;
 end;
 
 // Assign
@@ -4395,8 +4406,10 @@ end;
 procedure TdwsMember.Assign(Source: TPersistent);
 begin
    inherited;
-   if Source is TdwsMember then
+   if Source is TdwsMember then begin
       FVisibility := TdwsMember(Source).Visibility;
+      FReadOnly := TdwsMember(Source).ReadOnly;
+   end;
 end;
 
 // ------------------
@@ -4738,6 +4751,9 @@ begin
 
    if IsDefault then
       parent.DefaultProperty := propSym;
+
+   if IsReintroduce then
+      propSym.IsReintroduce := True;
 
    propSym.DeprecatedMessage := Deprecated;
 end;
@@ -5252,7 +5268,7 @@ end;
 constructor TdwsAbstractUnit.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
-  FDependencies := TStringList.Create;
+  FDependencies := TFastCompareTextList.Create;
 end;
 
 destructor TdwsAbstractUnit.Destroy;
@@ -5270,6 +5286,13 @@ end;
 function TdwsAbstractUnit.GetUnitName: String;
 begin
   Result := FUnitName;
+end;
+
+// SameUnitName
+//
+function TdwsAbstractUnit.SameUnitName(const aName : String) : Boolean;
+begin
+   Result := UnicodeSameText(FUnitName, aName);
 end;
 
 // Notification
@@ -5351,7 +5374,7 @@ end;
 constructor TdwsEmptyUnit.Create(AOwner: TComponent);
 begin
   inherited;
-  FDependencies := TStringList.Create;
+  FDependencies := TFastCompareTextList.Create;
 end;
 
 destructor TdwsEmptyUnit.Destroy;
@@ -5368,6 +5391,13 @@ end;
 function TdwsEmptyUnit.GetUnitName: String;
 begin
   Result := FUnitName;
+end;
+
+// SameUnitName
+//
+function TdwsEmptyUnit.SameUnitName(const aName : String) : Boolean;
+begin
+   Result := UnicodeSameText(FUnitName, aName);
 end;
 
 function TdwsEmptyUnit.GetUnitTable(systemTable : TSystemSymbolTable; unitSyms : TUnitMainSymbols;

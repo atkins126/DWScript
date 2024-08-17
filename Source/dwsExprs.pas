@@ -24,10 +24,10 @@ unit dwsExprs;
 interface
 
 uses
-   System.Classes, System.SysUtils, System.TypInfo, System.Types, System.Variants,
+   System.Classes, System.SysUtils, System.Types, System.SyncObjs,
    dwsSymbols, dwsErrors, dwsUtils, dwsDataContext, dwsExprList,
-   dwsStrings, dwsStack, SyncObjs, dwsFileSystem, dwsTokenTypes, dwsUnitSymbols,
-   dwsJSON, dwsXPlatform, dwsInfo, dwsScriptSource, dwsCustomData, dwsSymbolDictionary,
+   dwsStack, dwsFileSystem, dwsTokenTypes, dwsUnitSymbols,
+   dwsXPlatform, dwsInfo, dwsScriptSource, dwsCustomData, dwsSymbolDictionary,
    dwsContextMap, dwsCompilerContext;
 
 type
@@ -317,7 +317,7 @@ type
 
          FResult : TdwsResult;
          FParameters : TData;
-         FFileSystem : IdwsFileSystem;
+         FFileSystem : IdwsFileSystemRW;
          FLocalizer : IdwsLocalizer;
          FRTTIRawAttributes : IScriptDynArray;
 
@@ -358,8 +358,6 @@ type
          function GetLocalizer : IdwsLocalizer;
          procedure SetLocalizer(const val : IdwsLocalizer);
          function GetExecutionTimedOut : Boolean;
-
-         function GetFileSystem : IdwsFileSystem;
 
          procedure RaiseMaxRecursionReached;
          procedure SetCurrentProg(const val : TdwsProgram); inline;
@@ -409,6 +407,7 @@ type
          procedure LocalizeString(const aString : String; var Result : String); override;
 
          function ValidateFileName(const path : String) : String; override;
+         function FileSystem : IdwsFileSystemRW; override;
 
          property Prog : TdwsMainProgram read FProg;
          property CurrentProg : TdwsProgram read FCurrentProg write SetCurrentProg;
@@ -417,7 +416,6 @@ type
 
          property Parameters : TData read FParameters;
          property Result : TdwsResult read FResult;
-         property FileSystem : IdwsFileSystem read GetFileSystem;
          property CustomStates : TdwsCustomStates read GetCustomStates;
          function HasCustomStates : Boolean;
          property CustomInterfaces : TdwsCustomInterfaces read GetCustomInterfaces;
@@ -883,6 +881,8 @@ type
          function ScriptPos : TScriptPos; override; final;
 
          property DataPtr[exec : TdwsExecution] : IDataContext read GetDataPtrFunc;
+
+         function IncValue(exec : TdwsExecution; delta : Int64) : Int64; virtual;
 
          function  SpecializeTypedExpr(const context : ISpecializationContext) : TTypedExpr; override; final;
          function  SpecializeDataExpr(const context : ISpecializationContext) : TDataExpr; virtual;
@@ -1428,7 +1428,6 @@ type
 
          function GetExpr(const x: Integer): TTypedExpr;
          procedure SetExpr(const x: Integer; const Value: TTypedExpr);
-         function GetCount : Integer;
 
       public
          destructor Destroy; override;
@@ -1443,7 +1442,7 @@ type
          procedure Clear; inline;
 
          property Expr[const x: Integer]: TTypedExpr read GetExpr write SetExpr; default;
-         property Count : Integer read GetCount;
+         property Count : Integer read FList.FCount;
          property Table : TSymbolTable read FTable write FTable;
          property DefaultExpected : TParamSymbol read FDefaultExpected write FDefaultExpected;
    end;
@@ -1677,9 +1676,12 @@ implementation
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
 
-uses dwsFunctions, dwsCoreExprs, dwsMagicExprs, dwsMethodExprs, dwsUnifiedConstants,
+uses
+   System.Variants, System.TypInfo,
+   dwsFunctions, dwsCoreExprs, dwsMagicExprs, dwsMethodExprs, dwsUnifiedConstants,
    dwsInfoClasses, dwsCompilerUtils, dwsConstExprs, dwsResultFunctions,
-   dwsSpecializationContext, dwsDynamicArrays, dwsArrayExprs, dwsAssociativeArrays;
+   dwsSpecializationContext, dwsDynamicArrays, dwsArrayExprs, dwsAssociativeArrays,
+   dwsStrings;
 
 // TScriptDynamicArray_InitData
 //
@@ -1975,8 +1977,8 @@ begin
 
       // Prepare FileSystem
       if FProg.RuntimeFileSystem<>nil then
-         FFileSystem:=FProg.RuntimeFileSystem.AllocateFileSystem
-      else FFileSystem:=TdwsOSFileSystem.Create;
+         FFileSystem := FProg.RuntimeFileSystem.AllocateFileSystemRW
+      else FFileSystem := TdwsOSFileSystem.Create;
 
       // Initialize global variables
       Status:=esrNone;
@@ -2495,11 +2497,11 @@ end;
 
 // GetFileSystem
 //
-function TdwsProgramExecution.GetFileSystem : IdwsFileSystem;
+function TdwsProgramExecution.FileSystem : IdwsFileSystemRW;
 begin
    if FFileSystem = nil then begin
       if FProg.RuntimeFileSystem <> nil then
-         FFileSystem := FProg.RuntimeFileSystem.AllocateFileSystem
+         FFileSystem := FProg.RuntimeFileSystem.AllocateFileSystemRW
       else FFileSystem := TdwsOSFileSystem.Create;
    end;
    Result := FFileSystem;
@@ -3432,7 +3434,7 @@ end;
 //
 function TdwsResult.ToUTF8String : UTF8String;
 begin
-   Result:=UTF8Encode(ToString);
+   Result := StringToUTF8(ToString);
 end;
 
 // AddCRLF
@@ -3910,7 +3912,7 @@ var
    v : Variant;
 begin
    EvalAsVariant(exec, v);
-   VariantToInt64(v, Result);
+   Result := VariantToInt64(v);
 end;
 
 // EvalAsBoolean
@@ -4501,6 +4503,13 @@ end;
 function TDataExpr.ScriptPos : TScriptPos;
 begin
    Result := FScriptPos;
+end;
+
+// IncValue
+//
+function TDataExpr.IncValue(exec : TdwsExecution; delta : Int64) : Int64;
+begin
+   Result := DataPtr[exec].IncInteger(0, delta);
 end;
 
 // SpecializeTypedExpr
@@ -5916,19 +5925,12 @@ end;
 
 function TTypedExprList.GetExpr(const x: Integer): TTypedExpr;
 begin
-  Result := TTypedExpr(FList.List[x]);
+   Result := TTypedExpr(FList.List[x]);
 end;
 
 procedure TTypedExprList.SetExpr(const x: Integer; const Value: TTypedExpr);
 begin
-  FList.List[x] := Value;
-end;
-
-// GetCount
-//
-function TTypedExprList.GetCount : Integer;
-begin
-   Result:=FList.Count;
+   FList.List[x] := Value;
 end;
 
 // ------------------
@@ -8074,4 +8076,5 @@ finalization
    vScriptObjTemplate.Finalize;
 
 end.
+
 
