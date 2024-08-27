@@ -23,7 +23,7 @@ unit dwsByteBufferFunctions;
 interface
 
 uses
-   Types,
+   System.Types,
    dwsXPlatform, dwsUtils, dwsStrings, dwsCompilerContext, dwsDataContext,
    dwsSymbols, dwsFunctions, dwsUnitSymbols, dwsOperators, dwsExprs,
    dwsMagicExprs, dwsExprList, dwsTokenTypes, dwsScriptSource,
@@ -35,10 +35,12 @@ const
 type
 
    TBaseByteBufferSymbol = class (TTypeSymbol)
+      protected
+         function DoIsCompatible(typSym : TTypeSymbol) : Boolean; override;
+
       public
          constructor Create(const aName : String);
          function DynamicInitialization : Boolean; override;
-         function IsCompatible(typSym : TTypeSymbol) : Boolean; override;
          procedure InitDataContext(const data : IDataContext; offset : NativeInt); override;
    end;
 
@@ -228,12 +230,10 @@ uses dwsFileFunctions;
 //
 procedure RegisterByteBufferType(systemTable : TSystemSymbolTable; unitSyms : TUnitMainSymbols;
                                  unitTable : TSymbolTable);
-var
-   typByteBuffer : TBaseByteBufferSymbol;
 begin
    if systemTable.FindLocal(SYS_BYTEBUFFER) <> nil then Exit;
 
-   typByteBuffer := TBaseByteBufferSymbol.Create(SYS_BYTEBUFFER);
+   var typByteBuffer := TBaseByteBufferSymbol.Create(SYS_BYTEBUFFER);
    systemTable.AddSymbol(typByteBuffer);
 end;
 
@@ -241,15 +241,12 @@ end;
 //
 procedure RegisterByteBufferOperators(systemTable : TSystemSymbolTable; unitTable : TSymbolTable;
                                       operators : TOperators);
-var
-   typByteBuffer : TBaseByteBufferSymbol;
 begin
-   typByteBuffer := systemTable.FindTypeSymbol(SYS_BYTEBUFFER, cvMagic) as TBaseByteBufferSymbol;
+   var typByteBuffer := systemTable.FindTypeSymbol(SYS_BYTEBUFFER, cvMagic) as TBaseByteBufferSymbol;
 
-  if operators.FindCaster(typByteBuffer, systemTable.TypString) <> nil then Exit;
+   if operators.FindCaster(typByteBuffer, systemTable.TypString) <> nil then Exit;
 
    operators.RegisterCaster(typByteBuffer, systemTable.TypString, TConvStringToByteBufferExpr);
-
    operators.RegisterUnaryOperator(ttNEW, TByteBufferNewOpExpr, typByteBuffer);
 end;
 
@@ -277,9 +274,9 @@ begin
    Result := True;
 end;
 
-// IsCompatible
+// DoIsCompatible
 //
-function TBaseByteBufferSymbol.IsCompatible(typSym : TTypeSymbol) : Boolean;
+function TBaseByteBufferSymbol.DoIsCompatible(typSym : TTypeSymbol) : Boolean;
 begin
    Result := typSym.UnAliasedTypeIs(TBaseByteBufferSymbol);
 end;
@@ -321,11 +318,10 @@ end;
 //
 procedure TConvStringToByteBufferExpr.EvalAsInterface(exec : TdwsExecution; var result : IUnknown);
 var
-   bb : TdwsByteBuffer;
    s : String;
 begin
    Expr.EvalAsString(exec, s);
-   bb := TdwsByteBuffer.Create;
+   var bb := TdwsByteBuffer.Create;
    result := IdwsByteBuffer(bb);
    bb.AssignDataString(s);
 end;
@@ -965,64 +961,56 @@ procedure TByteBufferGetIntegersFunc.DoEvalAsDynArray(const args : TExprBaseList
 var
    dyn : TScriptDynamicNativeIntegerArray;
    buffer : IdwsByteBuffer;
-   index, count, elemSize : Integer;
-   i : NativeInt;
-   signed : Boolean;
-   pSrcInt64 : PInt64Array;
-   pSrcInt32 : PInt32Array;
-   pSrcUInt32 : PUInt32Array;
-   pSrcInt16 : PInt16Array;
-   pSrcUInt16 : PUInt16Array;
-   pSrcInt8 : PInt8Array;
-   pSrcUInt8 : PUInt8Array;
 begin
    dyn := TScriptDynamicNativeIntegerArray.Create(TTypedExpr(args.Expr).Typ.Typ);
    Result := dyn;
    args.GetBuffer(buffer);
-   index := args.AsInteger[1];
-   count := args.AsInteger[2];
-   elemSize := args.AsInteger[3];
-   signed := args.AsBoolean[4];
+   var index := args.AsInteger[1];
+   var count := args.AsInteger[2];
+   var elemSize := args.AsInteger[3];
+   var signed := args.AsBoolean[4];
    buffer.RangeCheck(index, count*elemSize);
    dyn.SetArrayLength(count);
+   {$IFOPT R+}{$DEFINE RANGEON}{$R-}{$ELSE}{$UNDEF RANGEON}{$ENDIF}
    case elemSize of
       1 :  if signed then begin
-         pSrcInt8 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcInt8[i]);
+         var p : PInt8Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end else begin
-         pSrcUInt8 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcUInt8[i]);
+         var p : PUInt8Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end;
       2 :  if signed then begin
-         pSrcInt16 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcInt16[i]);
+         var p : PInt16Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end else begin
-         pSrcUInt16 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcUInt16[i]);
+         var p : PUInt16Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end;
       4 : if signed then begin
-         pSrcInt32 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcInt32[i]);
+         var p : PInt32Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end else begin
-         pSrcUInt32 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcUInt32[i]);
+         var p : PUInt32Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end;
       8 : begin
          if not signed then
             raise EdwsByteBuffer.Create('UInt64 is not supported');
-         pSrcInt64 := buffer.DataPtr;
-         for i := 0 to count-1 do
-            dyn.SetAsInteger(i, pSrcInt64[i]);
+         var p : PInt64Array := buffer.DataPtr;
+         for var i := 0 to count-1 do
+            dyn.SetAsInteger(i, p[i]);
       end;
    else
       raise EdwsByteBuffer.CreateFmt('Unsupported element size (%d)', [ elemSize ]);
    end;
+   {$IFDEF RANGEON}{$R+}{$UNDEF RANGEON}{$ENDIF}
 end;
 
 {$ifdef BYTEBUFFER_FILE_FUNCTIONS}
